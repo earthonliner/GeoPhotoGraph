@@ -13,9 +13,7 @@ module.exports = {
     token: '',
     // 推荐在 Mapbox Studio 中 Duplicate「Monochrome / Light」得到自己的黑白极简样式
     username: 'mapbox',
-    styleId: 'light-v11',
-    // 逆地理编码返回语言，保证地名为英文
-    language: 'en'
+    styleId: 'light-v11'
   },
   request: {
     timeout: 10000

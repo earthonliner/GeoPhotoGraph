@@ -119,3 +119,47 @@ test('gcj02ToWgs84 only shifts inside China', () => {
   const cn = mapService.gcj02ToWgs84(39.9087, 116.3975);
   assert.ok(Math.abs(cn.lat - 39.9087) > 1e-4 && Math.abs(cn.lat - 39.9087) < 0.01);
 });
+
+const placeName = require('../utils/place-name');
+
+test('place-name: short CJK names become pinyin, long names become initials', () => {
+  assert.strictEqual(placeName.normalizePlaceName('北京', 'en'), 'BEIJING');
+  assert.strictEqual(placeName.normalizePlaceName('杭州市', 'en'), 'HANGZHOU');
+  assert.strictEqual(placeName.normalizePlaceName('成都', 'en'), 'CHENGDU');
+  assert.strictEqual(placeName.normalizePlaceName('重庆', 'en'), 'CHONGQING');
+  assert.strictEqual(placeName.normalizePlaceName('厦门', 'en'), 'XIAMEN');
+  assert.strictEqual(placeName.normalizePlaceName('中关村软件园', 'en'), 'ZGCRJY');
+  assert.strictEqual(placeName.normalizePlaceName('中国科学技术大学', 'en'), 'ZGKXJSDX');
+});
+
+test('place-name: latin names are uppercased, zh mode keeps CJK', () => {
+  assert.strictEqual(placeName.normalizePlaceName('Zermatt', 'en'), 'ZERMATT');
+  assert.strictEqual(placeName.normalizePlaceName('Hong Kong', 'en'), 'HONG KONG');
+  assert.strictEqual(placeName.normalizePlaceName('杭州', 'zh'), '杭州');
+  assert.strictEqual(placeName.normalizePlaceName('', 'en'), '');
+});
+
+test('map-service: reverse geocode / search use requested language', async () => {
+  config.mapbox.token = 'pk.test';
+  const urls = [];
+  global.wx = {
+    request({ url, success }) {
+      urls.push(decodeURIComponent(url));
+      if (url.includes('/mapbox.places/7.')) {
+        success({
+          statusCode: 200,
+          data: { features: [{ place_type: ['country'], text: 'Switzerland' }, { place_type: ['place'], text: 'Zermatt', context: [{ id: 'country.1', text: 'Switzerland' }] }] }
+        });
+      } else {
+        success({ statusCode: 200, data: { features: [{ text: 'Matterhorn', place_name: 'Matterhorn, Zermatt', center: [7.65, 45.97] }, { text: 'bad' }] } });
+      }
+    }
+  };
+  const geo = await mapService.reverseGeocode(46.0192, 7.7459, 'zh');
+  assert.deepStrictEqual(geo, { name: 'Zermatt', country: 'Switzerland' });
+  assert.ok(urls[0].includes('language=zh-Hans'));
+  const list = await mapService.searchPlaces('Matterhorn', 'en');
+  assert.deepStrictEqual(list, [{ name: 'Matterhorn', address: 'Matterhorn, Zermatt', lon: 7.65, lat: 45.97 }]);
+  assert.ok(urls[1].includes('language=en'));
+  delete global.wx;
+});
