@@ -1466,10 +1466,10 @@ function paintPoster(canvas, tplId, assets, info, style) {
 /* Page                                                                 */
 /* ------------------------------------------------------------------ */
 
-// 预览与页面内容同宽，但带底栏的整张海报须在首屏完整露出。预留高度对应 wxss 中
-// 大标题 170 + 预览说明 60 + 底部工具栏 140 + 间距 32（rpx），改版式时需同步。
+// 预览最宽与页面内容同宽，但有照片时带底栏的整张海报须在首屏完整露出。预留高度对应 wxss 中
+// 大标题 118 + 模板栏 180 + 预览说明 60 + 底部工具栏 140 + 间距 32（rpx），改版式时需同步。
 // 宽度按带底栏的高度计算且保持不变，开关底栏只改变预览高度
-const PREVIEW_RESERVED_RPX = 170 + 60 + 140 + 32;
+const PREVIEW_RESERVED_RPX = 118 + 180 + 60 + 140 + 32;
 function previewWidth(win) {
   const rpx = win.windowWidth / 750;
   const full = Math.min(win.windowWidth - 64 * rpx, 440);
@@ -1477,7 +1477,7 @@ function previewWidth(win) {
   const safeBottom = win.safeArea && win.screenHeight ? Math.max(0, win.screenHeight - win.safeArea.bottom) : 0;
   const fitH = win.windowHeight - PREVIEW_RESERVED_RPX * rpx - safeBottom;
   const fitW = (fitH * POSTER_W) / posterHeight(true);
-  return Math.floor(Math.max(Math.min(full, fitW), full * 0.72));
+  return Math.floor(Math.max(Math.min(full, fitW), full * 0.64));
 }
 
 // 随机模板：在当前分类内洗牌发牌，用完一轮再开始下一轮

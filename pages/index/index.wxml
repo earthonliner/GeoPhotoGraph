@@ -4,7 +4,29 @@
       <text class="large-title">GeoPics</text>
       <view class="capsule {{isMember ? 'capsule-dark' : ''}}" hover-class="tap-dim" bindtap="onOpenPaywall">{{memberChip}}</view>
     </view>
-    <text class="header-sub">把照片与它发生的地方，做成一张海报</text>
+    <text wx:if="{{!hasPhoto}}" class="header-sub">把照片与它发生的地方，做成一张海报</text>
+  </view>
+
+  <view wx:if="{{hasPhoto}}" class="tpl-bar">
+    <view class="seg">
+      <view
+        wx:for="{{categories}}"
+        wx:key="id"
+        class="seg-item {{item.id === catId ? 'seg-on' : ''}}"
+        data-id="{{item.id}}"
+        bindtap="onTapCategory"
+      >{{item.name}}</view>
+    </view>
+    <scroll-view scroll-x enable-flex class="chips" scroll-with-animation scroll-into-view="tab-{{templateId}}">
+      <view
+        wx:for="{{visibleTemplates}}"
+        wx:key="id"
+        id="tab-{{item.id}}"
+        class="chip {{item.id === templateId ? 'chip-on' : ''}}"
+        data-id="{{item.id}}"
+        bindtap="onTapTemplate"
+      >{{item.name}}</view>
+    </scroll-view>
   </view>
 
   <view class="stage">
@@ -74,31 +96,6 @@
       <text wx:if="{{itemCount === 1}}" class="section-foot">点按 + 可继续添加，最多 {{maxBatch}} 张，一次生成多张海报。</text>
       <text wx:elif="{{batchMode === 'unique'}}" class="section-foot">所有照片使用同一模板。点按缩略图编辑单张，左上角勾选的照片用于批量下载。</text>
       <text wx:else class="section-foot">每张照片在当前分类内随机分配模板，点按缩略图可单独更换。左上角勾选的照片用于批量下载。</text>
-    </view>
-
-    <view class="section">
-      <view class="section-head">
-        <text class="section-title">模板</text>
-      </view>
-      <view class="seg seg-full">
-        <view
-          wx:for="{{categories}}"
-          wx:key="id"
-          class="seg-item {{item.id === catId ? 'seg-on' : ''}}"
-          data-id="{{item.id}}"
-          bindtap="onTapCategory"
-        >{{item.name}}</view>
-      </view>
-      <scroll-view scroll-x enable-flex class="chips" scroll-with-animation scroll-into-view="tab-{{templateId}}">
-        <view
-          wx:for="{{visibleTemplates}}"
-          wx:key="id"
-          id="tab-{{item.id}}"
-          class="chip {{item.id === templateId ? 'chip-on' : ''}}"
-          data-id="{{item.id}}"
-          bindtap="onTapTemplate"
-        >{{item.name}}</view>
-      </scroll-view>
     </view>
 
     <view class="section">
