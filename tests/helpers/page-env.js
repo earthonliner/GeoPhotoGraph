@@ -1,14 +1,26 @@
 /**
- * 在 Node 里运行 pages/index/index.js：Page() 捕获页面定义，setData 直接合并进 data，
+ * 在 Node 里运行页面脚本（pages/<name>/<name>.js）：Page() 捕获页面定义，setData 按路径写入 data，
  * wx 替身记录调用。每次 createPage() 都重新执行页面脚本，得到一个干净的页面实例。
- * 导出高清图（exportItem）与预览绘制（render）用替身代替，只验证页面流程。
+ * 首页的导出高清图（exportItem）与预览绘制（render）用替身代替，只验证页面流程。
  */
 const fs = require('fs');
 const path = require('path');
 
-const PAGE_FILE = path.join(__dirname, '../../pages/index/index.js');
-const SOURCE = fs.readFileSync(PAGE_FILE, 'utf8');
-const req = (p) => require(path.resolve(path.dirname(PAGE_FILE), p));
+const PAGES_DIR = path.join(__dirname, '../../pages');
+const sources = {};
+
+// 与真实 setData 一致，支持 'list[0].open' 这样的路径
+function applyPatch(data, patch) {
+  for (const key of Object.keys(patch)) {
+    const parts = key.match(/[^.[\]]+/g);
+    let obj = data;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      if (obj[parts[i]] === undefined || obj[parts[i]] === null) obj[parts[i]] = /^\d+$/.test(parts[i + 1]) ? [] : {};
+      obj = obj[parts[i]];
+    }
+    obj[parts[parts.length - 1]] = patch[key];
+  }
+}
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -135,22 +147,27 @@ function createWx(overrides) {
   return Object.assign(wx, overrides);
 }
 
-function createPage(wx) {
+function createPage(wx, name = 'index') {
   global.wx = wx;
+  const file = path.join(PAGES_DIR, name, `${name}.js`);
+  if (!sources[name]) sources[name] = fs.readFileSync(file, 'utf8');
+  const req = (p) => require(path.resolve(path.dirname(file), p));
   let def = null;
-  new Function('require', 'Page', 'wx', SOURCE)(req, (d) => {
+  new Function('require', 'Page', 'wx', sources[name])(req, (d) => {
     def = d;
   }, wx);
   const page = Object.assign({}, def, { data: JSON.parse(JSON.stringify(def.data)) });
   page.setData = function setData(patch, cb) {
-    Object.assign(this.data, patch);
+    applyPatch(this.data, patch);
     if (cb) cb();
   };
-  page.renders = 0;
-  page.render = async function render() {
-    this.renders += 1;
-  };
-  page.exportItem = async (item) => `poster-${item.id}.jpg`;
+  if (name === 'index') {
+    page.renders = 0;
+    page.render = async function render() {
+      this.renders += 1;
+    };
+    page.exportItem = async (item) => `poster-${item.id}.jpg`;
+  }
   return page;
 }
 
