@@ -21,7 +21,7 @@ async function payMock(order) {
     title: '测试支付',
     content: `当前为测试支付模式，不会真实扣款。\n确认模拟支付 ${order.title}（${order.priceText}）？`,
     confirmText: '模拟支付',
-    confirmColor: '#111111'
+    confirmColor: '#007AFF'
   });
   return { ok: !!res.confirm };
 }

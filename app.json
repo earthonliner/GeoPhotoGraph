@@ -1,10 +1,12 @@
 {
   "pages": ["pages/index/index"],
   "window": {
-    "navigationBarBackgroundColor": "#f5f4f1",
+    "navigationBarBackgroundColor": "#f2f2f7",
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "GeoPics",
-    "backgroundColor": "#f5f4f1",
+    "backgroundColor": "#f2f2f7",
+    "backgroundColorTop": "#f2f2f7",
+    "backgroundColorBottom": "#f2f2f7",
     "backgroundTextStyle": "dark"
   },
   "requiredPrivateInfos": ["chooseLocation"],

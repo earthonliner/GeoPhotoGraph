@@ -129,6 +129,14 @@ function label(state, now) {
   return '免费版 · 开通会员';
 }
 
+// 大标题旁胶囊按钮上的短文案
+function chipLabel(state, now) {
+  if (state.invite) return '会员';
+  const rest = remainingQuota(state, now);
+  if (rest > 0) return `会员 · ${rest} 张`;
+  return state.bought ? '续购会员' : '开通会员';
+}
+
 // 付费面板中的额度明细
 function packLines(state, plans, now) {
   return activePacks(state, now).map((p) => {
@@ -151,6 +159,7 @@ module.exports = {
   addPack,
   consume,
   label,
+  chipLabel,
   packLines,
   formatPrice,
   formatDate,
