@@ -25,6 +25,9 @@ const MAX_BATCH = 9;
 const FOOTER_KEY = 'geopics.footer';
 
 const posterHeight = (footer) => POSTER_H + (footer ? FOOTER_H : 0);
+const exportSizeText = (footer) => `${POSTER_W * EXPORT_SCALE} × ${Math.round(posterHeight(footer) * EXPORT_SCALE)}`;
+// 界面强调色（iOS 系统蓝），用于系统弹窗按钮
+const TINT = '#007AFF';
 
 // 各模板中照片的取景区域（逻辑单位）；胶片 / 明信片的照片框固定，其余为整版或下半版
 const FILM_PHOTO = { left: 68, top: 50, w: 264, h: 368 };
@@ -1400,16 +1403,16 @@ function drawBrandFooter(ctx, y0, style, qr) {
 function paintEmpty(ctx) {
   const W = POSTER_W;
   const H = POSTER_H;
-  ctx.fillStyle = '#efeeea';
+  ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+  ctx.strokeStyle = 'rgba(60,60,67,0.12)';
   ctx.lineWidth = 0.6;
   ctx.strokeRect(20, 20, W - 40, H - 40);
-  ctx.fillStyle = '#1a1a1a';
+  ctx.fillStyle = '#1c1c1e';
   ctx.textBaseline = 'alphabetic';
   setFont(ctx, 30, 800, SANS);
   drawSpacedText(ctx, 'GEOPICS', W / 2, H / 2 - 6, 5, 'center');
-  ctx.fillStyle = '#8a8a86';
+  ctx.fillStyle = '#8e8e93';
   setFont(ctx, 9, 400, SERIF, 'italic');
   drawSpacedText(ctx, 'SELECT A PHOTO TO BEGIN', W / 2, H / 2 + 18, 2.4, 'center');
 }
@@ -1463,6 +1466,20 @@ function paintPoster(canvas, tplId, assets, info, style) {
 /* Page                                                                 */
 /* ------------------------------------------------------------------ */
 
+// 预览与页面内容同宽，但带底栏的整张海报须在首屏完整露出。预留高度对应 wxss 中
+// 大标题 170 + 预览说明 60 + 底部工具栏 140 + 间距 32（rpx），改版式时需同步。
+// 宽度按带底栏的高度计算且保持不变，开关底栏只改变预览高度
+const PREVIEW_RESERVED_RPX = 170 + 60 + 140 + 32;
+function previewWidth(win) {
+  const rpx = win.windowWidth / 750;
+  const full = Math.min(win.windowWidth - 64 * rpx, 440);
+  if (!win.windowHeight) return Math.floor(full);
+  const safeBottom = win.safeArea && win.screenHeight ? Math.max(0, win.screenHeight - win.safeArea.bottom) : 0;
+  const fitH = win.windowHeight - PREVIEW_RESERVED_RPX * rpx - safeBottom;
+  const fitW = (fitH * POSTER_W) / posterHeight(true);
+  return Math.floor(Math.max(Math.min(full, fitW), full * 0.72));
+}
+
 // 随机模板：在当前分类内洗牌发牌，用完一轮再开始下一轮
 function pickRandomTemplates(count, categoryId) {
   return batchUtil.pickRandomTemplates(templatesOf(categoryId).map((t) => t.id), count);
@@ -1471,9 +1488,12 @@ function pickRandomTemplates(count, categoryId) {
 Page({
   data: {
     footerOn: true,
+    exportSize: '',
     isMember: false,
     memberLabel: '',
+    memberChip: '',
     currentLocked: true,
+    lockBadges: false,
     paywallVisible: false,
     plans: appConfig.membership.plans.map((pl) => Object.assign({ priceText: membership.formatPrice(pl.price) }, pl)),
     singleOffer: Object.assign({ priceText: membership.formatPrice(appConfig.membership.single.price) }, appConfig.membership.single),
@@ -1548,7 +1568,7 @@ Page({
     this._mapWarned = false;
 
     const win = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync();
-    const cssW = Math.floor(Math.min(win.windowWidth - 48, 440));
+    const cssW = previewWidth(win);
     let footerOn = true;
     try {
       footerOn = wx.getStorageSync(FOOTER_KEY) !== false;
@@ -1559,12 +1579,35 @@ Page({
     this.cssSize = { w: cssW, h: cssH };
     this.dpr = Math.min(win.pixelRatio || 2, 3);
     this.setData(
-      Object.assign({ footerOn, canvasStyle: `width:${cssW}px;height:${cssH}px;` }, this.pickerView(), this.memberView(), this.listView())
+      Object.assign(
+        { footerOn, exportSize: exportSizeText(footerOn), canvasStyle: `width:${cssW}px;height:${cssH}px;` },
+        this.pickerView(),
+        this.memberView(),
+        this.listView()
+      )
     );
   },
 
   onReady() {
     this.initPreviewCanvas();
+    this.observeLargeTitle();
+  },
+
+  onUnload() {
+    if (this._titleObserver) this._titleObserver.disconnect();
+  },
+
+  // 仿 iOS 大标题：页面内的大标题滚出视野后，才在导航栏显示标题
+  observeLargeTitle() {
+    if (!this.createIntersectionObserver) return;
+    let shown = false;
+    this._titleObserver = this.createIntersectionObserver();
+    this._titleObserver.relativeToViewport().observe('.large-title', (res) => {
+      const show = res.intersectionRatio === 0;
+      if (show === shown) return;
+      shown = show;
+      wx.setNavigationBarTitle({ title: show ? 'GeoPics' : '' });
+    });
   },
 
   /* ---------------------------- canvas 初始化 ---------------------------- */
@@ -1590,7 +1633,7 @@ Page({
       this.preview.width = Math.round(w * this.dpr);
       this.preview.height = Math.round(h * this.dpr);
     }
-    this.setData({ canvasStyle: `width:${w}px;height:${h}px;` });
+    this.setData({ canvasStyle: `width:${w}px;height:${h}px;`, exportSize: exportSizeText(this.data.footerOn) });
   },
 
   onToggleFooter(e) {
@@ -1673,7 +1716,9 @@ Page({
       itemCount: list.length,
       selectedCount: list.filter((x) => x.selected).length,
       currentId: this.poster.id,
-      currentLocked: !this.isEntitled(this.poster)
+      currentLocked: !this.isEntitled(this.poster),
+      // 全部带水印时角标没有区分意义，只在部分照片已解锁时标出
+      lockBadges: list.some((x) => x.locked) && list.some((x) => !x.locked)
     };
   },
 
@@ -1688,6 +1733,7 @@ Page({
     return {
       isMember: membership.remainingQuota(this.member) > 0,
       memberLabel: membership.label(this.member),
+      memberChip: membership.chipLabel(this.member),
       packLines: membership.packLines(this.member, appConfig.membership.plans)
     };
   },
@@ -1858,6 +1904,21 @@ Page({
     return this.chooseAndImport(true);
   },
 
+  // 缩略图条末尾的 “+”：继续添加，或重新选择替换全部
+  async onTapAddTile() {
+    if (this.data.busy) return;
+    const canAdd = this.items.length < MAX_BATCH;
+    const replace = this.items.length > 1 ? '重新选择（替换全部）' : '重新选择照片';
+    let tapIndex;
+    try {
+      ({ tapIndex } = await wxp('showActionSheet', { itemList: canAdd ? ['继续添加照片', replace] : [replace] }));
+    } catch (e) {
+      return;
+    }
+    if (canAdd && tapIndex === 0) await this.onAddPhotos();
+    else await this.onChoosePhoto();
+  },
+
   async chooseAndImport(append) {
     const remain = MAX_BATCH - (append ? this.items.length : 0);
     if (remain <= 0) {
@@ -1928,7 +1989,7 @@ Page({
         content: '未读取到位置，请在地图上手动选择',
         confirmText: '去选择',
         cancelText: '暂不',
-        confirmColor: '#111111'
+        confirmColor: TINT
       }).catch(() => ({ confirm: false }));
       if (modal.confirm) await this.onPickLocation();
     } else {
@@ -1936,7 +1997,7 @@ Page({
         title: '部分照片未读取到位置',
         content: `有 ${missing.length} 张照片没有位置信息（缩略图上标有“无位置”），点选该照片后可手动选择位置。`,
         showCancel: false,
-        confirmColor: '#111111'
+        confirmColor: TINT
       }).catch(() => {});
     }
   },
@@ -2153,21 +2214,55 @@ Page({
     this._placeTimer = setTimeout(() => this.render(), 200);
   },
 
-  // 把当前照片的地名统一应用到所有照片（坐标各自保留，并作废尚未返回的自动地名解析）
-  onApplyPlaceToAll() {
+  // 把当前照片的地名统一应用到所有照片（坐标各自保留，并作废尚未返回的自动地名解析）。
+  // 当前照片还没有可用地名时返回 false
+  spreadPlace() {
     const text = (this.poster.place || '').trim();
-    if (!text || text === 'LOCATING…') {
-      wx.showToast({ title: '请先填写地名', icon: 'none' });
-      return;
-    }
+    if (!text || text === 'LOCATING…') return false;
     this.items.forEach((it) => {
       it.locId += 1;
       it.place = text;
       it.placeManual = true;
     });
+    return true;
+  },
+
+  spreadDate() {
+    const { dateText, dateValue } = this.poster;
+    if (!dateText) return false;
+    this.items.forEach((it) => {
+      Object.assign(it, { dateText, dateValue, dateManual: true });
+    });
+    return true;
+  },
+
+  onApplyPlaceToAll() {
+    if (!this.spreadPlace()) {
+      wx.showToast({ title: '请先填写地名', icon: 'none' });
+      return;
+    }
     this.syncView();
     this.render();
     wx.showToast({ title: `地名已应用到 ${this.items.length} 张`, icon: 'none' });
+  },
+
+  async onApplyToAllMenu() {
+    let tapIndex;
+    try {
+      ({ tapIndex } = await wxp('showActionSheet', { itemList: ['地点和日期', '仅地点', '仅日期'] }));
+    } catch (e) {
+      return;
+    }
+    if (tapIndex === 1) return this.onApplyPlaceToAll();
+    if (tapIndex === 2) return this.onApplyDateToAll();
+    if (!this.spreadPlace()) {
+      wx.showToast({ title: '请先填写地名', icon: 'none' });
+      return;
+    }
+    this.spreadDate();
+    this.syncView();
+    this.render();
+    wx.showToast({ title: `地点和日期已应用到 ${this.items.length} 张`, icon: 'none' });
   },
 
   onPlaceReset() {
@@ -2441,14 +2536,10 @@ Page({
   },
 
   onApplyDateToAll() {
-    const { dateText, dateValue } = this.poster;
-    if (!dateText) {
+    if (!this.spreadDate()) {
       wx.showToast({ title: '请先选择日期', icon: 'none' });
       return;
     }
-    this.items.forEach((it) => {
-      Object.assign(it, { dateText, dateValue, dateManual: true });
-    });
     this.syncView();
     this.render();
     wx.showToast({ title: `日期已应用到 ${this.items.length} 张`, icon: 'none' });
@@ -2691,7 +2782,7 @@ Page({
         content: `${notice}\n是否仅下载可下载的 ${allowed.length} 张？`,
         confirmText: `仅下载 ${allowed.length} 张`,
         cancelText: bought ? '购买额外会员' : '去解锁',
-        confirmColor: '#111111'
+        confirmColor: TINT
       }).catch(() => ({ confirm: false }));
       if (!res.confirm) {
         this.openPaywall(resume, bought ? notice : '');
@@ -2724,6 +2815,11 @@ Page({
       return;
     }
     return this.requestSave(this.items.slice(), () => this.onSaveAll());
+  },
+
+  // 工具栏的批量按钮：全部勾选时即“下载全部”，否则只下载勾选的照片
+  onSaveBatch() {
+    return this.data.selectedCount === this.items.length ? this.onSaveAll() : this.onSaveSelected();
   },
 
   // 逐张导出并保存到相册；相册权限被拒绝时立即终止，其余失败计入统计
@@ -2762,7 +2858,7 @@ Page({
         title: '需要相册权限',
         content: ok ? `已保存 ${ok} 张，请在设置中允许保存到相册后继续` : '请在设置中允许保存到相册后重试',
         confirmText: '去设置',
-        confirmColor: '#111111'
+        confirmColor: TINT
       }).catch(() => ({ confirm: false }));
       if (res.confirm) wx.openSetting({});
       return;
@@ -2776,7 +2872,7 @@ Page({
         title: '部分导出失败',
         content: `成功 ${ok} 张，失败 ${fail} 张，可重试失败的照片。`,
         showCancel: false,
-        confirmColor: '#111111'
+        confirmColor: TINT
       }).catch(() => {});
     }
   }
