@@ -620,3 +620,36 @@
   display: flex;
   gap: 32rpx;
 }
+
+/* categories */
+.cats {
+  display: flex;
+  flex-direction: row;
+  white-space: nowrap;
+  margin-bottom: 16rpx;
+}
+
+.cat {
+  flex-shrink: 0;
+  height: 52rpx;
+  line-height: 52rpx;
+  padding: 0 26rpx;
+  margin-right: 12rpx;
+  font-size: 24rpx;
+  color: #8a8a86;
+  border-radius: 26rpx;
+  border: 1rpx solid #d9d8d3;
+  box-sizing: border-box;
+}
+
+.cat-active {
+  color: #fff;
+  background: #111;
+  border-color: #111;
+  font-weight: 600;
+}
+
+.cat-hot:not(.cat-active) {
+  color: #b5502a;
+  border-color: #e3c3b3;
+}
