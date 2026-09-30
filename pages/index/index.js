@@ -181,7 +181,9 @@ function drawSpacedText(ctx, text, x, y, spacing, align, mode) {
 // 让大字地名自适应宽度：从 maxSize 开始逐步缩小
 function fitFontSize(ctx, text, maxWidth, maxSize, minSize, weight, family, spacing, style) {
   let size = maxSize;
-  while (size > minSize) {
+  // 名称特别长时允许比 minSize 再缩小一些，宁可小一点也不要超出边界
+  const floor = Math.max(6, Math.floor(minSize * 0.6));
+  while (size > floor) {
     setFont(ctx, size, weight, family, style);
     if (measureSpaced(ctx, text, spacing) <= maxWidth) break;
     size -= 1;
@@ -1493,6 +1495,7 @@ Page({
     dateToday: exifParser.toDateValue(new Date()),
     place: '',
     placeLang: 'en',
+    placeLevel: 'city',
     placeManual: false,
     hasLocation: false,
     searchVisible: false,
@@ -2189,6 +2192,17 @@ Page({
     });
   },
 
+  // 地名范围：城市（默认）/ 详细。手动修改过的地名不受影响
+  onPlaceLevelChange(e) {
+    const level = e.currentTarget.dataset.level;
+    if (level === this.data.placeLevel) return;
+    this.setData({ placeLevel: level }, () => {
+      this.items.forEach((item) => {
+        if (item.lat !== null && !item.placeManual) this.resolvePlace(item, ++item.locId);
+      });
+    });
+  },
+
   onTapTemplate(e) {
     const id = e.currentTarget.dataset.id;
     if (id === this.poster.templateId) return;
@@ -2506,7 +2520,9 @@ Page({
     }
     if (locId !== item.locId) return;
 
-    item.place = placeName.normalizePlaceName((geo && geo.name) || fallbackName, lang) || 'UNKNOWN';
+    // 默认只显示城市，避免地名过长超出海报边界；可切换为“详细”
+    const composed = geo ? placeName.formatPlace(geo.parts || { city: geo.name }, this.data.placeLevel, lang) : '';
+    item.place = composed || placeName.normalizePlaceName(fallbackName, lang) || 'UNKNOWN';
     item.placeManual = false;
     this.touch(item, true);
   },

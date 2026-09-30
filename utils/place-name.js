@@ -119,7 +119,42 @@ function normalizePlaceName(name, lang) {
   return containsCjk(text) ? toLatinName(text) : text.toUpperCase();
 }
 
+// 德语 / 英语地名里常见的限定后缀：Frankfurt am Main、Freiburg im Breisgau、Newcastle upon Tyne
+const QUALIFIER_RE = /\s+(?:im|am|an der|ob der|in der|bei|upon)\s+\S.*$/i;
+const LONG_NAME = 14;
+
+/**
+ * 城市级地名过长时去掉限定后缀，例如 St. Wolfgang im Salzkammergut -> St. Wolfgang。
+ * 只处理拉丁字母且超过 LONG_NAME 个字符的名称，短名与汉字名保持原样。
+ */
+function shortenCityName(name) {
+  const text = String(name || '').trim();
+  if (text.length <= LONG_NAME || containsCjk(text)) return text;
+  const short = text.replace(QUALIFIER_RE, '').trim();
+  return short.length >= 3 ? short : text;
+}
+
+/**
+ * 按层级组合地名。
+ * level = 'city'：只显示城市（缺失时依次退到 locality / district / region / country）；
+ * level = 'detail'：在城市前（英文，逗号分隔）或后（中文）加上更细的区域，如 WEST LAKE, HANGZHOU。
+ * @param {object} parts { city, locality, district, region, country, neighborhood }
+ */
+function formatPlace(parts, level, lang) {
+  const p = parts || {};
+  const city = p.city || p.locality || p.district || p.region || p.country || '';
+  if (!city) return '';
+  const cityText = normalizePlaceName(shortenCityName(city), lang);
+  if (level !== 'detail') return cityText;
+  const detail = p.locality || p.district || p.neighborhood || '';
+  if (!detail || detail === city) return cityText;
+  const detailText = normalizePlaceName(detail, lang);
+  return lang === 'zh' ? `${cityText}${detailText}` : `${detailText}, ${cityText}`;
+}
+
 module.exports = {
+  shortenCityName,
+  formatPlace,
   SHORT_LIMIT,
   containsCjk,
   toLatinName,
