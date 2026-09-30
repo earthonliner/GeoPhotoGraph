@@ -15,7 +15,7 @@ function steps() {
 
 // canPurchase 为 false（iOS）时不出现价格与购买引导；cloud 模式下权益在云端，换机不丢
 function faqs(canPurchase, cloud) {
-  const { freeQuota, plans, single } = config.membership;
+  const { free, plans, lifetime, single } = config.membership;
   const list = [
     {
       q: '为什么读取不到拍摄地点？',
@@ -36,8 +36,15 @@ function faqs(canPurchase, cloud) {
     {
       q: '免费额度怎么计算？',
       a:
-        `每位用户有 ${freeQuota} 张免费额度，每保存一张无水印高清海报消耗 1 张，同一张照片再次保存不重复消耗。` +
-        `额度用完后，预览会带上水印${canPurchase ? '，开通会员后可继续保存' : ''}。`
+        `免费版只有「拍立得」模板每月有 ${free.monthly} 张免费额度，每保存一张无水印高清海报消耗 1 张，` +
+        '同一张照片用同一模板再次保存不重复消耗，每月 1 日重置。' +
+        `其余模板的预览带水印、不能下载${canPurchase ? '，付费后可去水印并下载' : ''}。`
+    },
+    {
+      q: '批量导入和批量下载怎么用？',
+      a: canPurchase
+        ? `一次最多导入 ${MAX_BATCH} 张。批量导入和批量下载只对月度、年度、买断会员和邀请码开放，单张解锁不含批量。`
+        : `一次最多导入 ${MAX_BATCH} 张。批量导入和批量下载为会员功能，已有会员权益或邀请码的用户可以使用。`
     }
   ];
   if (canPurchase) {
@@ -46,7 +53,9 @@ function faqs(canPurchase, cloud) {
       .join('；');
     list.push({
       q: '会员怎么收费？',
-      a: `${planText}；也可以 ${membership.formatPrice(single.price)} 单独解锁当前这张。会员可以重复购买，额度叠加使用，到期后未用完的额度失效。`
+      a:
+        `${planText}；${lifetime.name} ${membership.formatPrice(lifetime.price)}，一次买断、永久有效，每月可保存 ${lifetime.monthly} 张，次月 1 日重置、不累计；` +
+        `也可以 ${membership.formatPrice(single.price)} 单独解锁一张（不含批量）。月度和年度会员可以重复购买，额度叠加使用，到期后未用完的额度失效。`
     });
   }
   if (cloud) {

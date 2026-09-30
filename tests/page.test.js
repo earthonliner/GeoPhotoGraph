@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const config = require('../utils/config');
 const exifParser = require('../utils/exif-parser');
 const mapService = require('../utils/map-service');
+const membership = require('../utils/membership');
 const platform = require('../utils/platform');
 const { createHandler } = require('../cloudfunctions/api/handler');
 const { createFakeCloud } = require('./helpers/fake-cloud');
@@ -30,7 +31,12 @@ test.afterEach(() => {
   assert.deepStrictEqual(violations.splice(0), [], 'showModal 按钮文字不能超过 4 个字符');
 });
 
-const FREE_OUT = { invite: false, bought: false, freeUsed: 2, packs: [] };
+const MONTH = () => membership.monthKey(Date.now());
+const inDays = (n) => Date.now() + n * 86400000;
+// 本月免费额度已用完的免费用户；月度会员（已用 used 张）
+const freeOut = () => ({ invite: false, bought: false, freeMonth: MONTH(), freeUsed: 10, packs: [] });
+const monthMember = (used = 0) => ({ bought: true, packs: [{ planId: 'month', quota: 120, used, until: inDays(30) }] });
+const BATCH_NOTICE = '批量导入与批量下载只对月度、年度、买断会员和邀请码开放，单张解锁不含批量。';
 
 // cloud 模式：页面 + payment.js + 云函数（内存数据库）。offlineAfter 次扣额度之后模拟断网
 function cloudSetup(overrides) {
@@ -92,114 +98,264 @@ test('预览：首屏放得下带底栏的整张海报，底栏开关只改高�
   assert.strictEqual(se.cssSize.w, 226);
 });
 
-test('免费额度：两张以内无水印可下载，用完后出现水印并拦截', async () => {
+test('免费版：只有拍立得每月 10 张免费，其余模板带水印且不能下载', async () => {
   const wx = createWx();
   wx.files = ['a.jpg', 'k.jpg', 'x.jpg'];
   const page = createPage(wx);
   page.onLoad();
-  assert.strictEqual(page.data.memberChip, '免费 · 2 张');
+  assert.strictEqual(page.data.memberChip, '免费 · 10 张');
+  assert.strictEqual(page.data.batchOk, false);
   await page.onChoosePhoto();
-  assert.strictEqual(page.data.itemCount, 3);
-  assert.ok(page.data.list.every((x) => !x.locked));
+  assert.deepStrictEqual(wx.calls.chooseCounts, [1], '非会员一次只能选 1 张');
+  assert.strictEqual(page.data.itemCount, 1);
+
+  // 拍立得：无水印，提示剩余免费张数
+  assert.strictEqual(page.poster.templateId, 'polaroid');
+  assert.strictEqual(page.data.currentLocked, false);
   assert.strictEqual(page.buildStyle(page.poster).watermark, false);
+  assert.strictEqual(page.data.stageNote, '拍立得本月免费剩余 10 张，每保存一张消耗 1 张');
 
-  await page.onSavePoster();
-  assert.deepStrictEqual(wx.calls.save, [`poster-${page.items[0].id}.jpg`]);
-  assert.strictEqual(page.member.freeUsed, 1);
-  assert.strictEqual(wx.store['geopics.membership'].freeUsed, 1);
-
-  // 第 1 张已解锁、第 2 张用掉最后 1 张免费额度、第 3 张被拦下：询问后仅下载可下载的
-  await page.onSaveAll();
-  assert.strictEqual(wx.calls.modal[0].title, '部分照片未解锁');
-  assert.ok(wx.calls.modal[0].content.includes('免费额度只够 2 张'));
-  assert.ok(wx.calls.modal[0].content.endsWith('是否仅下载可下载的 2 张？'));
-  assert.deepStrictEqual([wx.calls.modal[0].confirmText, wx.calls.modal[0].cancelText], ['仅下载', '去解锁']);
-  assert.strictEqual(wx.calls.save.length, 3);
-  assert.deepStrictEqual(page.data.list.map((x) => x.locked), [false, false, true]);
-  assert.strictEqual(page.buildStyle(page.items[2]).watermark, true);
-  assert.strictEqual(page.data.memberChip, '开通会员');
-
-  page.onTapItem(tap({ id: page.items[2].id }));
+  // 其余模板：带水印、不能下载
+  page.onTapTemplate(tap({ id: 'arch' }));
+  assert.strictEqual(page.data.currentLocked, true);
+  assert.strictEqual(page.buildStyle(page.poster).watermark, true);
+  assert.strictEqual(page.data.stageNote, '「拱窗」模板预览带水印、不能下载；拍立得本月还可免费保存 10 张');
   await page.onSavePoster();
   assert.ok(page.data.paywallVisible);
-  assert.ok(page.data.paywallNotice.startsWith('2 张免费额度已用完。开通会员'));
-  assert.strictEqual(wx.calls.save.length, 3);
+  assert.strictEqual(
+    page.data.paywallNotice,
+    '该模板预览带水印、不能下载，付费后才可保存。拍立得模板本月还可免费保存 10 张。开通会员即可继续下载。'
+  );
+  assert.strictEqual(wx.calls.save.length, 0);
+  page.onPaywallClose();
+
+  // 回到拍立得保存：消耗 1 张，同一张照片再次保存不重复计费
+  page.onTapTemplate(tap({ id: 'polaroid' }));
+  await page.onSavePoster();
+  await page.onSavePoster();
+  assert.deepStrictEqual(wx.calls.save, [`poster-${page.poster.id}.jpg`, `poster-${page.poster.id}.jpg`]);
+  assert.strictEqual(page.member.freeUsed, 1);
+  assert.strictEqual(wx.store['geopics.membership'].freeUsed, 1);
+  assert.strictEqual(wx.store['geopics.membership'].freeMonth, MONTH());
+  assert.strictEqual(page.data.memberChip, '免费 · 9 张');
+
+  // 换模板要重新计费：拍立得保存过不代表其他模板也解锁
+  page.onTapTemplate(tap({ id: 'arch' }));
+  assert.strictEqual(page.data.currentLocked, true);
+  page.onTapTemplate(tap({ id: 'polaroid' }));
+  assert.strictEqual(page.data.currentLocked, false);
+
+  // 用完后拍立得也带水印，提示下月重置；到了新的一月自动恢复
+  page.member = Object.assign(membership.normalize(freeOut()));
+  page.onTapTemplate(tap({ id: 'mat' }));
+  page.onTapTemplate(tap({ id: 'polaroid' }));
+  page.items[0].unlocked = {};
+  page.refreshEntitlement();
+  assert.strictEqual(page.data.currentLocked, true);
+  assert.strictEqual(page.data.stageNote, '本月拍立得免费额度已用完，预览带水印');
+  assert.strictEqual(page.data.memberChip, '开通会员');
+  await page.onSavePoster();
+  assert.strictEqual(page.data.paywallNotice, '本月 10 张拍立得免费额度已用完，下月 1 日重置。开通会员即可继续下载。');
+  page.onPaywallClose();
+  page.member.freeMonth = '2020-01';
+  page.refreshEntitlement();
+  assert.strictEqual(page.data.currentLocked, false);
+  assert.strictEqual(page.data.memberChip, '免费 · 10 张');
 });
 
-test('本地模式购买：单张只解锁当前，会员额度可叠加，解锁后继续刚才的保存', async () => {
+test('本地模式购买：单张可用于任意模板，会员额度叠加，买断只能买一次，购买后继续刚才的保存', async () => {
   const wx = createWx();
   wx.files = ['a.jpg', 'k.jpg', 'x.jpg'];
-  wx.store['geopics.membership'] = FREE_OUT;
+  wx.store['geopics.membership'] = freeOut();
   const page = createPage(wx);
   page.onLoad();
   await page.onChoosePhoto();
   assert.ok(page.data.currentLocked);
+  assert.deepStrictEqual(page.data.plans.map((x) => [x.kind, x.id]), [['plan', 'month'], ['plan', 'year'], ['lifetime', 'lifetime']]);
 
+  // 取消模拟支付：什么都不发生
   await page.onSavePoster();
   assert.ok(page.data.paywallVisible);
+  wx.modalConfirm = false;
+  await page.onBuy(tap({ kind: 'single' }));
+  assert.strictEqual(page.member.singles, 0);
+  assert.ok(page.data.paywallVisible);
+  wx.modalConfirm = true;
+
+  // 单张解锁后自动继续保存，用掉这一张额度；不含批量
   await page.onBuy(tap({ kind: 'single' }));
   await sleep(450);
   assert.ok(!page.data.paywallVisible);
-  assert.deepStrictEqual(page.data.list.map((x) => x.locked), [false, true, true]);
-  assert.deepStrictEqual(wx.calls.save, [`poster-${page.items[0].id}.jpg`]);
+  assert.deepStrictEqual(wx.calls.save, [`poster-${page.poster.id}.jpg`]);
+  assert.strictEqual(page.member.singles, 0);
+  assert.strictEqual(page.data.batchOk, false);
+  assert.strictEqual(page.data.currentLocked, false, '已保存的这张在该模板下保持解锁');
+  page.onTapTemplate(tap({ id: 'arch' }));
+  assert.strictEqual(page.data.currentLocked, true);
 
-  // 取消模拟支付：什么都不发生
-  wx.modalConfirm = false;
+  // 月度会员：叠加额度、开放批量
   await page.onOpenPaywall();
   await page.onBuy(tap({ kind: 'plan', id: 'month' }));
-  assert.strictEqual(page.member.packs.length, 0);
-  assert.ok(page.data.paywallVisible);
-  page.onPaywallClose();
+  await sleep(450);
+  assert.strictEqual(page.data.batchOk, true);
+  assert.strictEqual(page.data.memberChip, '会员 · 120 张');
+  assert.strictEqual(page.data.currentLocked, false, '会员额度适用于所有模板');
+  await page.onSavePoster();
+  assert.strictEqual(wx.calls.save.length, 2);
+  assert.strictEqual(page.data.memberChip, '会员 · 119 张');
 
-  wx.modalConfirm = true;
-  wx.calls.save.length = 0;
-  await page.onSaveAll();
-  assert.strictEqual(wx.calls.modal.pop().title, '部分照片未解锁');
-  assert.strictEqual(wx.calls.save.length, 1);
-  wx.modalConfirm = false;
-  await page.onSaveAll();
-  assert.ok(page.data.paywallVisible, '选择“去解锁”打开付费面板');
-  wx.modalConfirm = true;
-  wx.calls.save.length = 0;
+  // 买断：只能买一次，买过后不再出现在档位里
+  await page.onOpenPaywall();
+  await page.onBuy(tap({ kind: 'lifetime', id: 'lifetime' }));
+  await sleep(450);
+  assert.strictEqual(page.member.lifetime.quota, 120);
+  assert.strictEqual(page.member.lifetime.month, MONTH());
+  assert.strictEqual(page.data.plans.length, 2);
+  assert.ok(page.data.packLines.some((l) => l.startsWith('买断会员 本月剩余')));
+  const before = JSON.stringify(page.member.lifetime);
+  await page.onBuy(tap({ kind: 'lifetime', id: 'lifetime' }));
+  assert.strictEqual(JSON.stringify(page.member.lifetime), before);
+  assert.ok(wx.store['geopics.membership'].lifetime, '买断记录写入缓存');
+});
+
+test('批量：导入与下载只对月度、年度、买断和邀请码开放，只买单张不含批量', async () => {
+  const wx = createWx();
+  wx.files = ['a.jpg', 'b.jpg', 'k.jpg'];
+  wx.store['geopics.membership'] = freeOut();
+  const page = createPage(wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  assert.deepStrictEqual(wx.calls.chooseCounts, [1]);
+  assert.strictEqual(page.data.itemCount, 1);
+
+  // “+”：只能重新选择；批量导入入口说明这是会员功能
+  wx.sheetTap = 1;
+  await page.onTapAddTile();
+  assert.deepStrictEqual(wx.calls.sheet.pop(), ['重新选择照片', '批量导入（会员功能）']);
+  assert.ok(page.data.paywallVisible);
+  assert.strictEqual(page.data.paywallNotice, BATCH_NOTICE);
+  assert.strictEqual(wx.calls.chooseMedia, 1);
+
+  // 只买单张不含批量：买完没有继续导入，面板关闭
+  await page.onBuy(tap({ kind: 'single' }));
+  await sleep(450);
+  assert.strictEqual(page.member.singles, 1);
+  assert.strictEqual(page.data.batchOk, false);
+  assert.strictEqual(wx.calls.chooseMedia, 1, '单张解锁不会打开批量选图');
+  assert.strictEqual(page.data.itemCount, 1);
+
+  // 直接走“继续添加”也会被拦下
+  await page.onAddPhotos();
+  assert.ok(page.data.paywallVisible);
+  assert.strictEqual(wx.calls.chooseMedia, 1);
+
+  // 购买月度会员后继续刚才的批量导入：还能再选 8 张
   await page.onBuy(tap({ kind: 'plan', id: 'month' }));
   await sleep(450);
-  assert.strictEqual(page.data.memberLabel, '会员 · 剩余 118 张');
-  assert.strictEqual(wx.calls.save.length, 3);
-  await page.onSaveAll();
-  assert.strictEqual(page.member.packs[0].used, 2, '同一张照片再次保存不重复计费');
+  assert.strictEqual(page.data.batchOk, true);
+  assert.strictEqual(wx.calls.chooseMedia, 2);
+  assert.strictEqual(wx.calls.chooseCounts[1], 8);
+  assert.strictEqual(page.data.itemCount, 4);
 
-  const relock = (used) => {
-    page.member.packs[0].used = used;
-    page.items.forEach((it) => {
-      it.unlocked = false;
-    });
-    page.refreshEntitlement();
-  };
-  relock(119);
+  // 会员在使用期间到期：已导入的照片保留，但批量下载被拦下，单张下载不受影响
+  page.member = membership.normalize(freeOut());
+  page.member.singles = 0;
+  page.refreshEntitlement();
+  assert.strictEqual(page.data.batchOk, false);
+  wx.calls.save.length = 0;
+  await page.onSaveBatch();
+  assert.ok(page.data.paywallVisible);
+  assert.strictEqual(page.data.paywallNotice, BATCH_NOTICE);
+  assert.strictEqual(wx.calls.save.length, 0);
+  page.onPaywallClose();
+  page.member = membership.normalize({ packs: [{ planId: 'month', quota: 120, used: 0, until: Date.now() - 1000 }] });
+  assert.strictEqual(membership.batchAllowed(page.member), false, '过期的额度包不算会员');
+  page.member = membership.normalize(monthMember());
+  page.refreshEntitlement();
+  await page.onSaveBatch();
+  assert.strictEqual(wx.calls.save.length, 4);
+});
+
+test('批量：邀请码与买断会员开放批量，随机模板可抽到付费模板', async () => {
+  for (const state of [{ invite: true }, { bought: true, lifetime: { planId: 'lifetime', quota: 120, month: MONTH(), used: 0 } }]) {
+    const wx = createWx();
+    wx.files = ['a.jpg', 'b.jpg', 'k.jpg'];
+    wx.store['geopics.membership'] = state;
+    const page = createPage(wx);
+    page.onLoad();
+    assert.strictEqual(page.data.batchOk, true);
+    await page.onChoosePhoto();
+    assert.deepStrictEqual(wx.calls.chooseCounts, [9]);
+    assert.strictEqual(page.data.itemCount, 3);
+    await page.onSaveAll();
+    assert.strictEqual(wx.calls.save.length, 3);
+  }
+});
+
+test('买断：月度额度用完后拦下并提示下月重置，新的一月自动恢复', async () => {
+  const wx = createWx();
+  wx.files = ['a.jpg'];
+  wx.store['geopics.membership'] = { bought: true, freeMonth: MONTH(), freeUsed: 10, lifetime: { planId: 'lifetime', quota: 120, month: MONTH(), used: 120 } };
+  const page = createPage(wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  assert.strictEqual(page.data.memberChip, '会员 · 已用完');
+  assert.strictEqual(page.data.memberLabel, '会员 · 本月额度已用完');
+  assert.strictEqual(page.data.batchOk, true, '买断会员始终可批量导入');
+  assert.strictEqual(page.data.currentLocked, true);
+  assert.strictEqual(page.data.stageNote, '额度已用完，预览带水印');
+  await page.onSavePoster();
+  assert.ok(page.data.paywallVisible);
+  assert.strictEqual(page.data.paywallNotice, '本月额度已用完，下月 1 日重置。购买额外的月度或年度会员即可继续下载。');
+  page.onPaywallClose();
+
+  page.member.lifetime.month = '2020-01';
+  page.refreshEntitlement();
+  assert.strictEqual(page.data.currentLocked, false);
+  assert.strictEqual(page.data.memberChip, '会员 · 120 张');
+});
+
+test('部分下载：会员额度不足时询问，只下载额度内的照片', async () => {
+  const wx = createWx();
+  wx.files = ['a.jpg', 'k.jpg', 'x.jpg'];
+  wx.store['geopics.membership'] = Object.assign(monthMember(119), { freeMonth: MONTH(), freeUsed: 10 });
+  const page = createPage(wx);
+  page.onLoad();
+  await page.onChoosePhoto();
   wx.modalConfirm = false;
   await page.onSaveAll();
   const short = wx.calls.modal.pop();
   assert.strictEqual(short.title, '会员额度不足');
   assert.ok(short.content.startsWith('本次需下载 3 张，剩余额度只够 1 张。'));
+  assert.ok(short.content.endsWith('是否仅下载可下载的 1 张？'));
   assert.deepStrictEqual([short.confirmText, short.cancelText], ['仅下载', '购买会员']);
   assert.ok(page.data.paywallVisible);
+  assert.strictEqual(wx.calls.save.length, 0);
   page.onPaywallClose();
-  wx.modalConfirm = true;
 
-  relock(120);
+  wx.modalConfirm = true;
+  await page.onSaveAll();
+  assert.strictEqual(wx.calls.save.length, 1);
+  assert.strictEqual(page.member.packs[0].used, 120);
   assert.strictEqual(page.data.memberChip, '续购会员');
+
+  // 额度和有效期都用完：直接提示，购买额外会员后继续
+  page.items.forEach((it) => { it.unlocked = {}; });
+  page.refreshEntitlement();
+  wx.calls.save.length = 0;
   await page.onSavePoster();
   assert.ok(page.data.paywallNotice.includes('购买额外的月度或年度会员'));
   await page.onBuy(tap({ kind: 'plan', id: 'year' }));
   await sleep(450);
   assert.strictEqual(page.member.packs.length, 2);
   assert.strictEqual(page.data.memberLabel, '会员 · 剩余 1999 张');
+  assert.strictEqual(wx.calls.save.length, 1, '购买后继续保存');
 });
 
 test('本地模式邀请码：忽略大小写与空格，错误时提示', async () => {
   config.membership.inviteCodes = ['geo0930'];
   const wx = createWx();
-  wx.store['geopics.membership'] = FREE_OUT;
+  wx.store['geopics.membership'] = freeOut();
   const page = createPage(wx);
   page.onLoad();
   await page.onOpenPaywall();
@@ -221,26 +377,29 @@ test('cloud：导出前由服务端扣额度，本地篡改会被纠正，支付
   const page = createPage(env.wx);
   page.onLoad();
   await page.onShow();
-  assert.strictEqual(page.data.freeLeft, 2);
+  assert.strictEqual(page.data.memberChip, '免费 · 10 张');
   await page.onChoosePhoto();
+  assert.strictEqual(page.data.itemCount, 1, '非会员一次一张');
   await page.onSavePoster();
   await page.onSavePoster();
   assert.strictEqual(env.wx.calls.save.length, 2);
-  assert.strictEqual(env.fake.dump().users['openid-a'].freeUsed, 1, '同一张不重复扣');
-  await page.onSaveAll();
-  assert.strictEqual(env.wx.calls.modal.pop().title, '部分照片未解锁');
-  assert.strictEqual(env.wx.calls.save.length, 4);
-  assert.strictEqual(env.fake.dump().users['openid-a'].freeUsed, 2);
+  assert.strictEqual(env.fake.dump().users['openid-a'].freeUsed, 1, '同一张同一模板不重复扣');
+  assert.strictEqual(page.data.memberChip, '免费 · 9 张');
 
-  // 本地被改成“还有额度”：服务端拒绝，不出图并打开付费面板
-  page.member = { invite: false, bought: false, freeUsed: 0, singles: 0, packs: [] };
-  page.onTapItem(tap({ id: page.items[2].id }));
+  // 本地被改成“有单张额度”：非免费模板保存时服务端拒绝，不出图并打开付费面板，以服务端快照为准
+  page.onTapTemplate(tap({ id: 'arch' }));
+  assert.ok(page.data.currentLocked);
+  page.member = membership.normalize({ singles: 5 });
+  page.refreshEntitlement();
+  assert.ok(!page.data.currentLocked);
   env.wx.calls.save.length = 0;
   await page.onSavePoster();
   assert.strictEqual(env.wx.calls.save.length, 0);
   assert.ok(page.data.paywallVisible);
   assert.strictEqual(page.data.paywallNotice, '额度不足，购买会员后即可继续下载。');
-  assert.strictEqual(page.member.freeUsed, 2, '以服务端快照为准');
+  assert.strictEqual(page.member.singles, 0);
+  assert.strictEqual(page.member.freeUsed, 1, '以服务端快照为准');
+  assert.ok(page.data.currentLocked);
 
   env.pay = 'cancel';
   await page.onBuy(tap({ kind: 'plan', id: 'month' }));
@@ -253,6 +412,8 @@ test('cloud：导出前由服务端扣额度，本地篡改会被纠正，支付
   assert.ok(!page.data.paywallVisible);
   assert.strictEqual(page.member.packs[0].quota, 120);
   assert.strictEqual(env.wx.calls.save.length, 1, '购买后继续保存');
+  assert.strictEqual(env.fake.dump().users['openid-a'].packs[0].used, 1);
+  assert.strictEqual(page.data.batchOk, true);
 
   // 回调迟迟未到：不在本地发放，提示确认中；之后回到页面立即同步
   env.pay = 'none';
@@ -273,6 +434,32 @@ test('cloud：导出前由服务端扣额度，本地篡改会被纠正，支付
   assert.strictEqual(env.fake.dump().users['openid-a'].invite, true);
 });
 
+test('cloud：买断由服务端入账，重复购买被拒绝并同步已有权益', async () => {
+  const env = cloudSetup();
+  const page = createPage(env.wx);
+  page.onLoad();
+  await page.onShow();
+  assert.deepStrictEqual(page.data.plans.map((x) => x.kind), ['plan', 'plan', 'lifetime']);
+  await page.onBuy(tap({ kind: 'lifetime', id: 'lifetime' }));
+  await sleep(450);
+  assert.deepStrictEqual(env.fake.dump().users['openid-a'].lifetime.quota, 120);
+  assert.strictEqual(page.member.lifetime.planId, 'lifetime');
+  assert.strictEqual(page.data.batchOk, true);
+  assert.deepStrictEqual(page.data.plans.map((x) => x.kind), ['plan', 'plan']);
+  assert.strictEqual(page.data.memberChip, '会员 · 120 张');
+
+  // 另一台设备上已买过、本机缓存还不知道：服务端拒绝，页面提示并同步
+  page.member = membership.normalize({});
+  page.refreshEntitlement();
+  assert.strictEqual(page.data.plans.length, 3);
+  await page.onBuy(tap({ kind: 'lifetime', id: 'lifetime' }));
+  await sleep(0);
+  assert.ok(env.wx.calls.toast.includes('已拥有买断会员'));
+  assert.strictEqual(Object.values(env.fake.dump().orders).filter((o) => o.kind === 'lifetime').length, 1, '没有再下单');
+  assert.ok(page.member.lifetime, '已同步到云端的买断记录');
+  assert.strictEqual(page.data.plans.length, 2);
+});
+
 test('cloud：回到页面时同步权益有最短间隔', async () => {
   const env = cloudSetup();
   const page = createPage(env.wx);
@@ -291,6 +478,7 @@ test('cloud：扣额度时网络异常立即停止批量，并提示已保存张
   const env = cloudSetup();
   env.offlineAfter = 1;
   env.wx.files = ['a.jpg', 'k.jpg'];
+  env.wx.store['geopics.membership'] = { invite: true };
   const page = createPage(env.wx);
   page.onLoad();
   await page.onChoosePhoto();
@@ -307,15 +495,60 @@ test('cloud：扣额度时网络异常立即停止批量，并提示已保存张
 test('iOS：不展示价格与购买入口，文案不含购买引导，邀请码照常可用', async () => {
   config.membership.inviteCodes = ['geo0930'];
   const wx = createWx({ getDeviceInfo: () => ({ platform: 'ios' }) });
-  wx.store['geopics.membership'] = { invite: false, bought: false, freeUsed: 1, packs: [] };
-  wx.files = ['a.jpg', 'k.jpg'];
+  wx.store['geopics.membership'] = Object.assign(freeOut(), { freeUsed: 1 });
+  wx.files = ['a.jpg', 'k.jpg', 'x.jpg'];
   const page = createPage(wx);
   page.onLoad();
   assert.strictEqual(page.data.canPurchase, false);
-  assert.strictEqual(page.data.memberChip, '免费 · 1 张');
-  assert.strictEqual(page.data.memberLabel, '免费额度剩余 1 张');
+  assert.strictEqual(page.data.memberChip, '免费 · 9 张');
+  assert.strictEqual(page.data.memberLabel, '拍立得本月免费剩余 9 张');
   await page.onChoosePhoto();
+  assert.strictEqual(page.data.itemCount, 1);
+  page.onTapTemplate(tap({ id: 'arch' }));
+  assert.ok(!/开通|购买|¥/.test(page.data.stageNote), page.data.stageNote);
 
+  // 非免费模板：提示不带购买引导，面板里没有价格与购买入口
+  await page.onSavePoster();
+  assert.ok(page.data.paywallVisible);
+  assert.strictEqual(page.data.paywallNotice, '该模板预览带水印、不能下载，付费后才可保存。拍立得模板本月还可免费保存 9 张。');
+  assert.ok(!/开通|购买|¥/.test(page.data.paywallNotice));
+  await page.onBuy(tap({ kind: 'plan', id: 'month' }));
+  await page.onBuy(tap({ kind: 'lifetime', id: 'lifetime' }));
+  await page.onBuy(tap({ kind: 'single' }));
+  assert.ok(!wx.calls.modal.some((m) => m.title === '测试支付'));
+  assert.strictEqual(page.member.packs.length, 0);
+  assert.ok(!page.member.lifetime && page.member.singles === 0);
+  page.onPaywallClose();
+
+  // 批量入口同样只说明是会员功能
+  wx.sheetTap = 1;
+  await page.onTapAddTile();
+  assert.strictEqual(page.data.paywallNotice, '批量导入与批量下载仅对会员开放，已有会员权益或邀请码的用户可以使用。');
+  assert.ok(!/开通|购买|¥|买断|月度|年度/.test(page.data.paywallNotice));
+  page.onPaywallClose();
+
+  // 免费额度用完：拍立得也被拦下
+  page.onTapTemplate(tap({ id: 'polaroid' }));
+  page.member = membership.normalize(freeOut());
+  page.refreshEntitlement();
+  assert.strictEqual(page.data.memberChip, '额度已用完');
+  assert.strictEqual(page.data.memberLabel, '本月免费额度已用完');
+  await page.onSavePoster();
+  assert.strictEqual(page.data.paywallNotice, '本月 10 张拍立得免费额度已用完，下月 1 日重置。');
+
+  // 兑换邀请码后继续保存
+  page.onInviteInput({ detail: { value: 'geo0930' } });
+  await page.onRedeemInvite();
+  await sleep(450);
+  assert.strictEqual(page.data.memberChip, '会员');
+  assert.strictEqual(wx.calls.save.length, 1, '兑换后继续保存');
+
+  // 已有会员额度（例如在安卓上购买的）：部分下载的询问不带购买引导
+  page.member = membership.normalize(Object.assign(monthMember(119), { freeMonth: MONTH(), freeUsed: 10 }));
+  page.items.forEach((it) => { it.unlocked = {}; });
+  page.refreshEntitlement();
+  await page.onChoosePhoto();
+  assert.strictEqual(page.data.itemCount, 3);
   wx.modalConfirm = false;
   await page.onSaveAll();
   const ask = wx.calls.modal.pop();
@@ -323,28 +556,7 @@ test('iOS：不展示价格与购买入口，文案不含购买引导，邀请�
   assert.ok(!/开通|购买/.test(ask.content));
   assert.ok(!page.data.paywallVisible, 'iOS 上取消后不弹付费面板');
 
-  wx.modalConfirm = true;
-  await page.onSaveAll();
-  assert.strictEqual(wx.calls.save.length, 1);
-  assert.strictEqual(page.data.memberChip, '额度已用完');
-  assert.strictEqual(page.data.memberLabel, '免费额度已用完');
-  page.onTapItem(tap({ id: page.items[1].id }));
-  await page.onSavePoster();
-  assert.ok(page.data.paywallVisible);
-  assert.strictEqual(page.data.paywallNotice, '2 张免费额度已用完。');
-
-  await page.onBuy(tap({ kind: 'plan', id: 'month' }));
-  await page.onBuy(tap({ kind: 'single' }));
-  assert.ok(!wx.calls.modal.some((m) => m.title === '测试支付'));
-  assert.strictEqual(page.member.packs.length, 0);
-
-  page.onInviteInput({ detail: { value: 'geo0930' } });
-  await page.onRedeemInvite();
-  await sleep(450);
-  assert.strictEqual(page.data.memberChip, '会员');
-  assert.strictEqual(wx.calls.save.length, 2, '兑换后继续保存');
-
-  page.member = { invite: false, bought: true, freeUsed: 2, packs: [{ planId: 'month', quota: 120, used: 120, until: Date.now() + 86400000 }] };
+  page.member = membership.normalize(monthMember(120));
   page.refreshEntitlement();
   assert.strictEqual(page.data.memberChip, '额度已用完');
   assert.strictEqual(page.data.memberLabel, '额度已用完');
@@ -414,8 +626,9 @@ test('转发：标题带地名，卡片图把整张预览居中放进 5:4，失�
   assert.strictEqual(page.onShareTimeline().title, 'GEOPICS · 把照片与它发生的地方，做成一张海报');
   page.onPlaceInput({ detail: { value: 'MY TRIP' } });
   const manual = page.onShareAppMessage();
-  assert.strictEqual(manual.title, 'GEOPICS · 把照片与它发生的地方，做成一张海报', '手动输入的地名不进标题');
+  assert.strictEqual(manual.title, '「MY TRIP」· 用 GEOPICS 做的地图海报', '手动输入的地名同样进标题');
   assert.strictEqual((await manual.promise).title, manual.title);
+  assert.strictEqual(page.onShareTimeline().title, manual.title);
   page.onPlaceReset();
   await sleep(0);
   assert.strictEqual(page.onShareTimeline().title, '「ZERMATT」· 用 GEOPICS 做的地图海报');
@@ -547,11 +760,12 @@ test('开发提示：只在开发版 / 体验版且未配置 token 时显示', (
 
 test('付费面板：会员档位标出单张均价，均价最低的一档高亮', () => {
   const page = createPage(createWx());
-  const [month, year] = page.data.plans;
+  const [month, year, lifetime] = page.data.plans;
   assert.strictEqual(month.unitText, '约 ¥0.12/张');
   assert.strictEqual(year.unitText, '约 ¥0.05/张');
-  assert.deepStrictEqual([month.best, year.best], [false, true]);
-  assert.deepStrictEqual([month.priceText, year.priceText], ['¥14.9', '¥109.9']);
+  assert.deepStrictEqual([month.best, year.best, lifetime.best], [false, true, false]);
+  assert.deepStrictEqual([month.priceText, year.priceText, lifetime.priceText], ['¥14.9', '¥109.9', '¥299']);
+  assert.deepStrictEqual([lifetime.kind, lifetime.unitText, lifetime.desc], ['lifetime', '永久有效', '一次买断，永久有效，每月 120 张']);
 });
 
 test('弹层：打开前用截图顶替原生 canvas，全部关闭后恢复并重绘', async () => {
@@ -584,6 +798,7 @@ test('弹层：打开前用截图顶替原生 canvas，全部关闭后恢复并�
 test('批量编辑：地点和日期可统一应用到全部照片，“+” 可继续添加或替换', async () => {
   const wx = createWx();
   wx.files = ['a.jpg', 'b.jpg', 'k.jpg'];
+  wx.store['geopics.membership'] = { invite: true };
   const page = createPage(wx);
   page.onLoad();
   await page.onChoosePhoto();

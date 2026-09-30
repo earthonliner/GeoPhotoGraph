@@ -23,12 +23,21 @@ test('帮助页：安卓正式版列出价格、云端权益、隐私说明与�
   const { page } = load({ openPrivacyContract() {} });
   assert.strictEqual(page.data.version, '版本 1.0.0');
   assert.ok(page.data.steps[0].text.includes('一次最多 9 张'));
-  assert.ok(
-    answer(page, '会员怎么收费？').startsWith(
-      '月度会员 ¥14.9，30 天内可保存 120 张；年度会员 ¥109.9，365 天内可保存 2000 张；也可以 ¥1.29 单独解锁当前这张。'
-    )
+  assert.strictEqual(
+    answer(page, '会员怎么收费？'),
+    '月度会员 ¥14.9，30 天内可保存 120 张；年度会员 ¥109.9，365 天内可保存 2000 张；' +
+      '买断会员 ¥299，一次买断、永久有效，每月可保存 120 张，次月 1 日重置、不累计；' +
+      '也可以 ¥1.29 单独解锁一张（不含批量）。月度和年度会员可以重复购买，额度叠加使用，到期后未用完的额度失效。'
   );
-  assert.ok(answer(page, '免费额度怎么计算？').includes('每位用户有 2 张免费额度'));
+  assert.strictEqual(
+    answer(page, '免费额度怎么计算？'),
+    '免费版只有「拍立得」模板每月有 10 张免费额度，每保存一张无水印高清海报消耗 1 张，' +
+      '同一张照片用同一模板再次保存不重复消耗，每月 1 日重置。其余模板的预览带水印、不能下载，付费后可去水印并下载。'
+  );
+  assert.strictEqual(
+    answer(page, '批量导入和批量下载怎么用？'),
+    '一次最多导入 9 张。批量导入和批量下载只对月度、年度、买断会员和邀请码开放，单张解锁不含批量。'
+  );
   assert.ok(answer(page, '换手机后额度还在吗？').includes('云端'));
   assert.deepStrictEqual(page.data.privacy.map((p) => p.title), ['照片只在手机上处理', '位置与地名', '会员与额度']);
   assert.ok(page.data.privacy[1].text.includes('Mapbox'));
@@ -38,8 +47,9 @@ test('帮助页：安卓正式版列出价格、云端权益、隐私说明与�
 
 test('帮助页：iOS 不出现价格与购买引导', () => {
   const { page } = load({ getDeviceInfo: () => ({ platform: 'ios' }) });
-  assert.ok(!/¥|开通|购买|收费/.test(allText(page)));
-  assert.ok(answer(page, '免费额度怎么计算？').endsWith('额度用完后，预览会带上水印。'));
+  assert.ok(!/¥|开通|购买|收费|买断|月度|年度/.test(allText(page)));
+  assert.ok(answer(page, '免费额度怎么计算？').endsWith('其余模板的预览带水印、不能下载。'));
+  assert.strictEqual(answer(page, '批量导入和批量下载怎么用？'), '一次最多导入 9 张。批量导入和批量下载为会员功能，已有会员权益或邀请码的用户可以使用。');
 });
 
 test('帮助页：本地模式不提云端；开发版 / 体验版显示版本类型', () => {

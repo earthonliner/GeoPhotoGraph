@@ -65,7 +65,7 @@ async function payCloud(order) {
 }
 
 /**
- * @param order { kind: 'plan'|'single', planId?, title, priceText }
+ * @param order { kind: 'plan'|'lifetime'|'single', planId?, title, priceText }
  * @returns Promise<{ ok, state?, pending? }>  用户取消返回 ok:false，其余错误抛出
  */
 async function pay(order) {
@@ -84,9 +84,10 @@ async function fetchEntitlement() {
   return membership.normalize(r.state);
 }
 
-// 保存前向服务端扣 1 张额度（cloud 模式）。key 相同只计费一次。额度不足时 ok 为 false
-async function charge(key) {
-  const r = await callApi('consume', { keys: [key] });
+// 保存前向服务端扣 1 张额度（cloud 模式）。key 相同只计费一次；tpl 是海报所用的模板，免费模板先用免费额度。
+// 额度不足时 ok 为 false
+async function charge(key, tpl) {
+  const r = await callApi('consume', { items: [{ key, tpl }] });
   if (!r.ok && r.code !== 'insufficient') throw apiError(r, 'consume failed');
   return { ok: !!r.ok, state: membership.normalize(r.state) };
 }

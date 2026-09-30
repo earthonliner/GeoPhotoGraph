@@ -52,14 +52,10 @@
         <text wx:if="{{busyText}}" class="busy-text">{{busyText}}</text>
       </view>
     </view>
-    <view wx:if="{{hasPhoto && currentLocked}}" class="stage-note">
-      <block wx:if="{{canPurchase}}">
-        <text>免费版预览带水印</text>
-        <text class="link stage-link" bindtap="onOpenPaywall">解锁无水印高清图</text>
-      </block>
-      <text wx:else>额度已用完，预览带水印</text>
+    <view wx:if="{{hasPhoto && stageNote}}" class="stage-note">
+      <text>{{stageNote}}</text>
+      <text wx:if="{{currentLocked && canPurchase}}" class="link stage-link" bindtap="onOpenPaywall">解锁无水印高清图</text>
     </view>
-    <text wx:elif="{{hasPhoto && freeLeft > 0}}" class="stage-note">剩余额度 {{freeLeft}} 张，每保存一张消耗 1 张</text>
     <text wx:if="{{singlePage}}" class="stage-note">当前为朋友圈预览，点击下方「前往小程序」即可用自己的照片制作</text>
     <text wx:elif="{{!hasPhoto}}" class="stage-note">选择带定位信息的原图，自动读取拍摄地点与日期</text>
     <text wx:if="{{tokenMissing}}" class="stage-note stage-warn">开发提示：未配置 Mapbox Token（utils/config.local.js），当前使用本地简约底图，地名不可用</text>
@@ -102,7 +98,8 @@
         </view>
         <text wx:if="{{batchMode === 'random'}}" class="link" bindtap="onReshuffle">重新随机</text>
       </view>
-      <text wx:if="{{itemCount === 1}}" class="section-foot">点按 + 可继续添加，最多 {{maxBatch}} 张，一次生成多张海报。</text>
+      <text wx:if="{{itemCount === 1 && batchOk}}" class="section-foot">点按 + 可继续添加，最多 {{maxBatch}} 张，一次生成多张海报。</text>
+      <text wx:elif="{{itemCount === 1}}" class="section-foot">{{canPurchase ? '批量导入与批量下载为会员功能：月度、年度、买断会员和邀请码可用，单张解锁不含批量。' : '批量导入与批量下载为会员功能。'}}<text class="link" bindtap="onOpenPaywall">{{canPurchase ? '查看会员权益' : '会员与额度'}}</text></text>
       <text wx:elif="{{batchMode === 'unique'}}" class="section-foot">所有照片使用同一模板。点按缩略图编辑单张，左上角勾选的照片用于批量下载。</text>
       <text wx:else class="section-foot">每张照片在当前分类内随机分配模板，点按缩略图可单独更换。左上角勾选的照片用于批量下载。</text>
     </view>
@@ -280,7 +277,7 @@
     <view wx:if="{{!hasPhoto}}" class="btn btn-primary {{busy ? 'btn-off' : ''}}" hover-class="tap-dim" bindtap="onChoosePhoto">从相册选择照片</view>
     <block wx:elif="{{itemCount > 1}}">
       <view class="btn btn-secondary {{busy ? 'btn-off' : ''}}" hover-class="tap-dim" bindtap="onSavePoster">{{currentLocked ? '解锁后保存' : '保存当前'}}</view>
-      <view class="btn btn-primary btn-gap {{busy || selectedCount === 0 ? 'btn-off' : ''}}" hover-class="tap-dim" bindtap="onSaveBatch">{{selectedCount === itemCount ? '下载全部 ' + itemCount + ' 张' : '下载所选 ' + selectedCount + ' 张'}}</view>
+      <view class="btn btn-primary btn-gap {{busy || selectedCount === 0 ? 'btn-off' : ''}}" hover-class="tap-dim" bindtap="onSaveBatch">{{!batchOk ? '批量下载 · 会员' : selectedCount === itemCount ? '下载全部 ' + itemCount + ' 张' : '下载所选 ' + selectedCount + ' 张'}}</view>
     </block>
     <view wx:else class="btn btn-primary {{busy ? 'btn-off' : ''}}" hover-class="tap-dim" bindtap="onSavePoster">{{currentLocked ? '解锁后保存' : '保存高清海报'}}</view>
   </view>
@@ -309,7 +306,7 @@
               wx:key="id"
               class="cell cell-tall {{index > 0 ? 'cell-line' : ''}}"
               hover-class="cell-hover"
-              data-kind="plan"
+              data-kind="{{item.kind}}"
               data-id="{{item.id}}"
               bindtap="onBuy"
             >
@@ -330,7 +327,7 @@
               <text class="price">{{singleOffer.priceText}}</text>
             </view>
           </view>
-          <text class="section-foot">解锁后可保存 {{exportSize}} 无水印高清海报，每保存一张消耗 1 个额度，同一张照片再次保存不重复计费。额度用完后，可再次购买月度或年度会员叠加使用。</text>
+          <text class="section-foot">月度、年度、买断会员开放批量导入与批量下载，买断每月额度有限、次月 1 日重置；单张解锁不含批量。解锁后可保存 {{exportSize}} 无水印高清海报，每保存一张消耗 1 个额度，同一张照片同一模板再次保存不重复计费。额度用完后，可再次购买月度或年度会员叠加使用。</text>
         </block>
         <block wx:else>
           <view class="group">
@@ -338,7 +335,7 @@
               <text class="pw-unavailable">由于相关规范，iOS 暂不支持在小程序内购买</text>
             </view>
           </view>
-          <text class="section-foot">每保存一张 {{exportSize}} 无水印高清海报消耗 1 个额度，同一张照片再次保存不重复计费。</text>
+          <text class="section-foot">每保存一张 {{exportSize}} 无水印高清海报消耗 1 个额度，同一张照片同一模板再次保存不重复计费。</text>
         </block>
 
         <view class="group pw-invite">
