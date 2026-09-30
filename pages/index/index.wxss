@@ -433,3 +433,61 @@
   line-height: 1.6;
   color: #8a8a86;
 }
+
+/* 日期 */
+.date-value {
+  display: flex;
+  align-items: baseline;
+}
+
+.date-edit {
+  margin-left: 16rpx;
+  font-size: 20rpx;
+  color: #9b9a95;
+  text-decoration: underline;
+}
+
+/* 调色盘 */
+.picker {
+  margin-top: 24rpx;
+}
+
+.pad {
+  position: relative;
+  width: 100%;
+  height: 300rpx;
+  border-radius: 20rpx;
+  background-image: linear-gradient(to top, #000, rgba(0, 0, 0, 0)), linear-gradient(to right, #fff, rgba(255, 255, 255, 0));
+}
+
+.pad-cursor {
+  position: absolute;
+  width: 36rpx;
+  height: 36rpx;
+  margin: -18rpx 0 0 -18rpx;
+  box-sizing: border-box;
+  border: 4rpx solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2rpx rgba(0, 0, 0, 0.35), 0 4rpx 10rpx rgba(0, 0, 0, 0.3);
+}
+
+.hue {
+  position: relative;
+  width: 100%;
+  height: 40rpx;
+  margin-top: 28rpx;
+  border-radius: 20rpx;
+  background-image: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+
+.hue-cursor {
+  position: absolute;
+  top: 50%;
+  width: 44rpx;
+  height: 44rpx;
+  margin: -22rpx 0 0 -22rpx;
+  box-sizing: border-box;
+  border: 5rpx solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2rpx rgba(0, 0, 0, 0.3), 0 4rpx 10rpx rgba(0, 0, 0, 0.3);
+}
