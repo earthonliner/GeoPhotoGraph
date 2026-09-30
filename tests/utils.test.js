@@ -1,4 +1,4 @@
-// 运行：node --test tests/
+// 运行：node --test tests/*.test.js
 const test = require('node:test');
 const assert = require('node:assert');
 
