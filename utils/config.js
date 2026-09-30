@@ -22,5 +22,21 @@ module.exports = {
   },
   request: {
     timeout: 10000
+  },
+  membership: {
+    // 邀请码（不区分大小写）。仅在客户端校验，正式上线请改为服务端校验（见 README「会员」）
+    inviteCodes: ['geo0930'],
+    // price 单位：分
+    plans: [
+      { id: 'month', name: '月度会员', desc: '30 天内无水印、不限张数下载', price: 1900, days: 30 },
+      { id: 'year', name: '年度会员', desc: '365 天内无水印、不限张数下载', price: 9900, days: 365 }
+    ],
+    single: { name: '单张解锁', desc: '仅解锁当前这张照片', price: 300 }
+  },
+  payment: {
+    // 'mock'：开发调试，弹窗确认后直接视为支付成功（不产生任何扣款）
+    // 'cloud'：走云函数下单 + wx.requestPayment，见 utils/payment.js
+    mode: 'mock',
+    cloud: { createOrder: 'createOrder', verifyInvite: 'verifyInvite' }
   }
 };

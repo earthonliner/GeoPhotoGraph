@@ -240,3 +240,43 @@ test('batch: deterministic with a seeded random function and handles edge cases'
   assert.deepStrictEqual(pickRandomTemplates(['only'], 3), ['only', 'only', 'only']);
   assert.deepStrictEqual(pickRandomTemplates(['a', 'b'], 0), []);
 });
+
+test('membership: invite code, plans and expiry', () => {
+  const m = require('../utils/membership');
+  config.membership.inviteCodes = ['geo0930'];
+  assert.ok(m.isValidInvite('geo0930'));
+  assert.ok(m.isValidInvite('  GEO0930 '));
+  assert.ok(!m.isValidInvite('geo0931'));
+  assert.ok(!m.isValidInvite(''));
+
+  const now = Date.UTC(2026, 8, 30);
+  const free = { invite: false, until: 0 };
+  assert.ok(!m.isActive(free, now));
+  assert.ok(m.isActive({ invite: true, until: 0 }, now));
+
+  const month = m.extend(free, 30, now);
+  assert.strictEqual(month.until, now + 30 * m.DAY);
+  assert.ok(m.isActive(month, now + 29 * m.DAY));
+  assert.ok(!m.isActive(month, now + 31 * m.DAY));
+  // 未到期时续费从到期日顺延
+  assert.strictEqual(m.extend(month, 30, now + 10 * m.DAY).until, now + 60 * m.DAY);
+  // 已过期后续费从当前时间开始
+  assert.strictEqual(m.extend(month, 30, now + 90 * m.DAY).until, now + 120 * m.DAY);
+
+  assert.strictEqual(m.label(free, now), '免费版 · 开通会员');
+  assert.strictEqual(m.label({ invite: true, until: 0 }, now), '会员 · 邀请码');
+  assert.ok(m.label(month, now).startsWith('会员 · '));
+  assert.strictEqual(m.formatPrice(1900), '¥19');
+  assert.strictEqual(m.formatPrice(350), '¥3.50');
+});
+
+test('membership: state persists through storage and ignores garbage', () => {
+  const m = require('../utils/membership');
+  const data = {};
+  const storage = { get: (k) => data[k], set: (k, v) => { data[k] = v; } };
+  assert.deepStrictEqual(m.load(storage), { invite: false, until: 0 });
+  m.save({ invite: true, until: 123 }, storage);
+  assert.deepStrictEqual(m.load(storage), { invite: true, until: 123 });
+  data['geopics.membership'] = 'oops';
+  assert.deepStrictEqual(m.load(storage), { invite: false, until: 0 });
+});
