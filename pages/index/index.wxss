@@ -1,0 +1,208 @@
+.page {
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 24rpx 48rpx 80rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.brand {
+  display: flex;
+  flex-direction: column;
+  padding: 24rpx 0 36rpx;
+}
+
+.brand-name {
+  font-size: 52rpx;
+  font-weight: 800;
+  letter-spacing: 12rpx;
+  color: #111;
+}
+
+.brand-sub {
+  margin-top: 10rpx;
+  font-size: 24rpx;
+  color: #8a8a86;
+  letter-spacing: 2rpx;
+}
+
+.card {
+  background: #fff;
+  border-radius: 32rpx;
+  padding: 32rpx;
+  box-shadow: 0 8rpx 40rpx rgba(0, 0, 0, 0.06);
+  margin-bottom: 32rpx;
+}
+
+.hint {
+  margin-top: 24rpx;
+  font-size: 24rpx;
+  line-height: 1.6;
+  color: #8a8a86;
+}
+
+/* buttons */
+.btn {
+  width: 100%;
+  height: 96rpx;
+  line-height: 96rpx;
+  padding: 0;
+  border-radius: 48rpx;
+  font-size: 28rpx;
+  font-weight: 600;
+  letter-spacing: 4rpx;
+  border: none;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.btn::after {
+  border: none;
+}
+
+.btn-primary {
+  background: #111;
+  color: #fff;
+  box-shadow: 0 12rpx 28rpx rgba(0, 0, 0, 0.22);
+}
+
+.btn-primary[disabled] {
+  background: #b9b8b3;
+  color: #f1f0ec;
+  box-shadow: none;
+}
+
+.btn-ghost {
+  margin-top: 24rpx;
+  height: 80rpx;
+  line-height: 80rpx;
+  background: #f1f0ec;
+  color: #333;
+  font-weight: 500;
+  font-size: 26rpx;
+}
+
+.btn-hover {
+  opacity: 0.85;
+  transform: scale(0.99);
+}
+
+.btn-save {
+  margin-top: 8rpx;
+}
+
+/* meta */
+.meta {
+  margin-top: 28rpx;
+}
+
+.meta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 14rpx 0;
+  border-bottom: 1rpx solid #efeeea;
+}
+
+.meta-label {
+  font-size: 20rpx;
+  letter-spacing: 5rpx;
+  color: #9b9a95;
+}
+
+.meta-value {
+  font-size: 26rpx;
+  color: #222;
+  letter-spacing: 1rpx;
+}
+
+.meta-place {
+  font-weight: 700;
+  letter-spacing: 3rpx;
+}
+
+/* tabs */
+.tabs {
+  display: flex;
+  background: #e9e8e3;
+  border-radius: 40rpx;
+  padding: 6rpx;
+  margin-bottom: 32rpx;
+}
+
+.tab {
+  flex: 1;
+  text-align: center;
+  height: 68rpx;
+  line-height: 68rpx;
+  font-size: 26rpx;
+  color: #6f6e6a;
+  border-radius: 34rpx;
+  transition: all 0.25s;
+}
+
+.tab-active {
+  background: #fff;
+  color: #111;
+  font-weight: 600;
+  box-shadow: 0 4rpx 14rpx rgba(0, 0, 0, 0.1);
+}
+
+/* preview */
+.preview {
+  position: relative;
+  align-self: center;
+  border-radius: 12rpx;
+  overflow: hidden;
+  box-shadow: 0 24rpx 60rpx rgba(0, 0, 0, 0.16);
+  margin-bottom: 32rpx;
+}
+
+.poster {
+  display: block;
+}
+
+.busy {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(245, 244, 241, 0.72);
+}
+
+.busy-text {
+  font-size: 24rpx;
+  letter-spacing: 4rpx;
+  color: #111;
+}
+
+.notice {
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: #8a6d3b;
+  background: #f7f0e1;
+  border-radius: 20rpx;
+  padding: 16rpx 24rpx;
+  margin-bottom: 32rpx;
+}
+
+.zoom {
+  padding-bottom: 12rpx;
+}
+
+.zoom-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+/* 离屏导出画布：不可见但必须参与渲染，因此用定位移出屏幕而不是 display:none */
+.export-canvas {
+  position: fixed;
+  left: -9999px;
+  top: 0;
+  width: 300px;
+  height: 400px;
+}

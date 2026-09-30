@@ -1,0 +1,19 @@
+{
+  "pages": ["pages/index/index"],
+  "window": {
+    "navigationBarBackgroundColor": "#f5f4f1",
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "GeoPics",
+    "backgroundColor": "#f5f4f1",
+    "backgroundTextStyle": "dark"
+  },
+  "requiredPrivateInfos": ["chooseLocation"],
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用于在地图上手动选择照片的拍摄位置"
+    }
+  },
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents",
+  "sitemapLocation": "sitemap.json"
+}

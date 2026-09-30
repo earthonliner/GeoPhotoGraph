@@ -1,0 +1,4 @@
+{
+  "desc": "GeoPics sitemap",
+  "rules": [{ "action": "allow", "page": "*" }]
+}

@@ -1,0 +1,78 @@
+<view class="page">
+  <view class="brand">
+    <text class="brand-name">GEOPICS</text>
+    <text class="brand-sub">把照片与它发生的地方，做成一张海报</text>
+  </view>
+
+  <view class="card">
+    <button class="btn btn-primary" hover-class="btn-hover" bindtap="onChoosePhoto">
+      {{hasPhoto ? '重新选择照片' : '选择原图照片'}}
+    </button>
+
+    <view wx:if="{{hasPhoto}}" class="meta">
+      <view class="meta-row">
+        <text class="meta-label">PLACE</text>
+        <text class="meta-value meta-place">{{place || '—'}}</text>
+      </view>
+      <view class="meta-row">
+        <text class="meta-label">COORD</text>
+        <text class="meta-value">{{hasLocation ? coordText : '未获取位置'}}</text>
+      </view>
+      <view class="meta-row">
+        <text class="meta-label">DATE</text>
+        <text class="meta-value">{{dateText || '—'}}</text>
+      </view>
+      <button class="btn btn-ghost" hover-class="btn-hover" bindtap="onPickLocation">
+        {{hasLocation ? '在地图上修改位置' : '在地图上手动选择位置'}}
+      </button>
+    </view>
+
+    <view wx:else class="hint">请选择带定位信息的原图（相册），将自动读取拍摄地点与日期</view>
+  </view>
+
+  <view class="tabs">
+    <view
+      wx:for="{{templates}}"
+      wx:key="id"
+      class="tab {{item.id === templateId ? 'tab-active' : ''}}"
+      data-id="{{item.id}}"
+      bindtap="onTapTemplate"
+    >{{item.name}}</view>
+  </view>
+
+  <view class="preview">
+    <canvas id="posterCanvas" type="2d" class="poster" style="{{canvasStyle}}"></canvas>
+    <view wx:if="{{busy}}" class="busy" style="{{canvasStyle}}">
+      <text class="busy-text">{{busyText}}</text>
+    </view>
+  </view>
+
+  <view wx:if="{{tokenMissing}}" class="notice">
+    未配置 Mapbox Token（utils/config.js），当前使用本地简约底图，地名不可用。
+  </view>
+
+  <view class="zoom card">
+    <view class="zoom-head">
+      <text class="meta-label">MAP ZOOM</text>
+      <text class="meta-value">{{zoom}}</text>
+    </view>
+    <slider
+      min="4"
+      max="16"
+      step="1"
+      value="{{zoom}}"
+      block-size="18"
+      activeColor="#111111"
+      backgroundColor="#dcdad5"
+      bindchanging="onZoomChanging"
+      bindchange="onZoomChange"
+    />
+  </view>
+
+  <button class="btn btn-primary btn-save" hover-class="btn-hover" disabled="{{!hasPhoto || busy}}" bindtap="onSavePoster">
+    保存高清海报
+  </button>
+
+  <!-- 离屏导出画布：移出可视区，物理尺寸在 JS 中设为 1200 x 1600 -->
+  <canvas id="exportCanvas" type="2d" class="export-canvas"></canvas>
+</view>

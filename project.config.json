@@ -1,0 +1,17 @@
+{
+  "description": "GeoPics - EXIF + map poster mini program",
+  "miniprogramRoot": "./",
+  "compileType": "miniprogram",
+  "libVersion": "3.4.0",
+  "appid": "touristappid",
+  "projectname": "geopics",
+  "setting": {
+    "urlCheck": true,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "compileHotReLoad": false
+  },
+  "condition": {}
+}

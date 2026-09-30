@@ -1,0 +1,6 @@
+page {
+  background: #f5f4f1;
+  color: #1a1a1a;
+  font-family: -apple-system, 'Helvetica Neue', 'PingFang SC', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
