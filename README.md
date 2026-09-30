@@ -33,7 +33,7 @@
 2. 小程序后台「服务器域名」中，把 `https://api.mapbox.com` 加入 `request` 与 `downloadFile` 合法域名（开发阶段可在开发者工具中勾选"不校验合法域名"）。
 3. 把 `project.config.json` 的 `appid` 换成自己的 AppID。`wx.chooseLocation` 需要 `app.json` 中的 `requiredPrivateInfos`（已配置）。
 
-未配置 token 时不会请求网络，海报使用本地绘制的简约底图，方便离线调试。
+Mapbox token 写在 `utils/config.local.js` 的 `mapboxToken`（仓库公开，GitHub 会拦截含 token 的提交，填写后执行 `git update-index --skip-worktree utils/config.local.js` 避免误提交；开发者工具上传时仍会打包该文件）。未配置 token 时不会请求网络，海报使用本地绘制的简约底图，方便离线调试。
 
 ## 界面
 
@@ -87,9 +87,9 @@
 ## 会员
 
 - **免费额度**：每位用户默认有 **2 张**免费额度（`config.membership.freeQuota`）。额度内预览无水印，可直接保存；每保存一张消耗 1 张，同一张照片再次保存不重复计费。免费额度用完后才显示斜向平铺的 `GEOPICS · PREVIEW` 水印，且**不支持下载**（点击保存会弹出付费面板）。免费额度优先于会员额度包消耗，购买会员不会重置已用的免费额度；邀请码会员不限量。
-- **权益存放位置**：`payment.mode = 'mock'`（默认，开发用）时，免费额度已用张数、会员和邀请码只存在本地缓存，清缓存会重置，也可被绕过；`'cloud'` 时全部以云函数记录的为准（按用户 openid），小程序只缓存服务端返回的快照。收费上线请使用 `'cloud'`，见下文「接入微信支付」。
+- **权益存放位置**：`payment.mode = 'mock'`（本地开发用，当前配置已切为 `'cloud'`）时，免费额度已用张数、会员和邀请码只存在本地缓存，清缓存会重置，也可被绕过；`'cloud'` 时全部以云函数记录的为准（按用户 openid），小程序只缓存服务端返回的快照。收费上线请使用 `'cloud'`，见下文「接入微信支付」。
 - **去水印并可下载**的三种方式：
-  1. **邀请码**：不区分大小写，兑换后永久享有会员权益、不限张数。mock 模式读 `utils/config.js` 的 `membership.inviteCodes`（当前为 `geo0930`）；cloud 模式在云函数环境变量 `INVITE_CODES` 里配置，客户端不再需要保存邀请码，同一用户 1 小时内连续输错 10 次会被暂时锁定。
+  1. **邀请码**：不区分大小写，兑换后永久享有会员权益、不限张数。mock 模式读 `utils/config.js` 的 `membership.inviteCodes`（上线配置中已清空；本地调试可临时填入）；cloud 模式在云函数环境变量 `INVITE_CODES` 里配置，客户端不再需要保存邀请码，同一用户 1 小时内连续输错 10 次会被暂时锁定。
   2. **开通会员（有额度）**：
 
      | 方案 | 价格 | 额度 | 有效期 |
@@ -106,7 +106,7 @@
 
 ### 接入微信支付（云开发方案）
 
-代码里已包含完整链路：小程序 `utils/payment.js` ⇄ 云函数 `cloudfunctions/api`（微信云开发 + 云支付）。默认仍是 `mock`，按下面步骤配置后切到 `cloud`。
+代码里已包含完整链路：小程序 `utils/payment.js` ⇄ 云函数 `cloudfunctions/api`（微信云开发 + 云支付）。配置文件当前已是 `cloud`；云函数尚未部署时无法保存无水印海报，本地调试请临时改回 `mock`。
 
 **流程**
 
