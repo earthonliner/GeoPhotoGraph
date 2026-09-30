@@ -653,3 +653,162 @@
   color: #b5502a;
   border-color: #e3c3b3;
 }
+
+/* membership */
+.brand-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.member-chip {
+  height: 52rpx;
+  line-height: 52rpx;
+  padding: 0 24rpx;
+  border-radius: 26rpx;
+  font-size: 22rpx;
+  color: #6f6e6a;
+  border: 1rpx solid #d9d8d3;
+  background: #fff;
+}
+
+.member-on {
+  color: #fff;
+  border-color: #111;
+  background: #111;
+}
+
+.thumb-lock {
+  position: absolute;
+  left: 6rpx;
+  bottom: 40rpx;
+  padding: 0 10rpx;
+  font-size: 16rpx;
+  line-height: 28rpx;
+  border-radius: 14rpx;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.save-hint {
+  margin-top: 16rpx;
+  font-size: 22rpx;
+  line-height: 1.6;
+  color: #8a8a86;
+  text-align: center;
+}
+
+.paywall {
+  margin-top: 100rpx;
+}
+
+.pw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.pw-title {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #111;
+}
+
+.pw-status {
+  display: inline-block;
+  margin-top: 16rpx;
+  padding: 0 18rpx;
+  height: 44rpx;
+  line-height: 44rpx;
+  border-radius: 22rpx;
+  font-size: 22rpx;
+  color: #6f6e6a;
+  background: #f1f0ec;
+}
+
+.pw-status-on {
+  color: #fff;
+  background: #111;
+}
+
+.pw-sub {
+  margin: 16rpx 0 20rpx;
+  font-size: 23rpx;
+  line-height: 1.6;
+  color: #8a8a86;
+}
+
+.pw-plan {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24rpx 28rpx;
+  margin-bottom: 16rpx;
+  border-radius: 24rpx;
+  background: #f7f6f3;
+  border: 1rpx solid #ebeae5;
+}
+
+.pw-plan-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.pw-plan-name {
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #111;
+}
+
+.pw-plan-desc {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #8a8a86;
+}
+
+.pw-price {
+  font-size: 32rpx;
+  font-weight: 700;
+  color: #111;
+}
+
+.pw-invite {
+  display: flex;
+  align-items: center;
+  margin-top: 24rpx;
+}
+
+.pw-input {
+  flex: 1;
+  height: 80rpx;
+  padding: 0 28rpx;
+  background: #f1f0ec;
+  border-radius: 40rpx;
+  font-size: 26rpx;
+}
+
+.pw-redeem {
+  margin-left: 16rpx;
+  height: 80rpx;
+  line-height: 80rpx;
+  padding: 0 36rpx;
+  border-radius: 40rpx;
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #fff;
+  background: #111;
+}
+
+.pw-error {
+  margin-top: 12rpx;
+  padding-left: 12rpx;
+  font-size: 22rpx;
+  color: #c0392b;
+}
+
+.pw-mock {
+  margin-top: 20rpx;
+  font-size: 20rpx;
+  line-height: 1.5;
+  color: #b5852a;
+}

@@ -5,6 +5,9 @@ const themes = require('../../utils/themes');
 
 const { hexToRgba } = themes;
 const batchUtil = require('../../utils/batch');
+const membership = require('../../utils/membership');
+const payment = require('../../utils/payment');
+const appConfig = require('../../utils/config');
 
 /* ------------------------------------------------------------------ */
 /* 常量与模板配置                                                       */
@@ -1258,6 +1261,36 @@ function paintCoord(ctx, scale, assets, info, tpl, style) {
   drawSpacedText(ctx, lon, m + 10, H - m - 34, 2, 'left');
 }
 
+// 免费版水印：整幅斜向平铺，深浅双层描边，任何底色上都清晰可见
+function drawWatermark(ctx, scale) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const text = 'GEOPICS · PREVIEW';
+  ctx.save();
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  setFont(ctx, 15, 800, SANS);
+  ctx.translate(W / 2, H / 2);
+  ctx.rotate(-Math.PI / 6);
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 2.4;
+  const stepX = 190;
+  const stepY = 86;
+  const span = Math.ceil(Math.hypot(W, H) / 2 / stepY) + 1;
+  for (let row = -span; row <= span; row += 1) {
+    const offset = (row % 2) * (stepX / 2);
+    for (let col = -3; col <= 3; col += 1) {
+      const x = col * stepX + offset;
+      const y = row * stepY;
+      ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+      ctx.strokeText(text, x, y);
+      ctx.fillStyle = 'rgba(255,255,255,0.62)';
+      ctx.fillText(text, x, y);
+    }
+  }
+  ctx.restore();
+}
+
 function paintEmpty(ctx) {
   const W = POSTER_W;
   const H = POSTER_H;
@@ -1315,6 +1348,7 @@ function paintPoster(canvas, tplId, assets, info, style) {
   textAlpha = style.textAlpha;
   PAINTERS[tpl.id](ctx, scale, assets, info, tpl, style);
   textAlpha = 1;
+  if (style.watermark) drawWatermark(ctx, scale);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1328,6 +1362,15 @@ function pickRandomTemplates(count, categoryId) {
 
 Page({
   data: {
+    isMember: false,
+    memberLabel: '',
+    currentLocked: true,
+    paywallVisible: false,
+    plans: appConfig.membership.plans.map((pl) => Object.assign({ priceText: membership.formatPrice(pl.price) }, pl)),
+    singleOffer: Object.assign({ priceText: membership.formatPrice(appConfig.membership.single.price) }, appConfig.membership.single),
+    inviteInput: '',
+    inviteError: '',
+    mockPay: payment.isMock(),
     categories: CATEGORIES,
     catId: HOT_CATEGORY,
     visibleTemplates: templatesOf(HOT_CATEGORY),
@@ -1378,6 +1421,8 @@ Page({
   onLoad() {
     // 非 data 状态：与渲染无关，避免多余的 setData
     this.items = [];
+    this.member = membership.load();
+    this._afterUnlock = null;
     this._itemSeq = 0;
     this.poster = this.createItem('');
     this._hsv = themes.hexToHsv(themes.DEFAULT_CUSTOM_HEX);
@@ -1395,7 +1440,9 @@ Page({
     const cssH = Math.round((cssW * 4) / 3);
     this.cssSize = { w: cssW, h: cssH };
     this.dpr = Math.min(win.pixelRatio || 2, 3);
-    this.setData(Object.assign({ canvasStyle: `width:${cssW}px;height:${cssH}px;` }, this.pickerView()));
+    this.setData(
+      Object.assign({ canvasStyle: `width:${cssW}px;height:${cssH}px;` }, this.pickerView(), this.memberView(), this.listView())
+    );
   },
 
   onReady() {
@@ -1447,6 +1494,7 @@ Page({
       photoPath: filePath,
       templateId: templateId || (this.poster && this.poster.templateId) || this.data.templateId,
       selected: true,
+      unlocked: false,
       lat: null,
       lon: null,
       place: '',
@@ -1472,15 +1520,117 @@ Page({
         selected: it.selected,
         current: it === this.poster,
         tplName: tpl ? tpl.name : '',
-        noLoc: it.lat === null
+        noLoc: it.lat === null,
+        locked: !this.isEntitled(it)
       };
     });
     return {
       list,
       itemCount: list.length,
       selectedCount: list.filter((x) => x.selected).length,
-      currentId: this.poster.id
+      currentId: this.poster.id,
+      currentLocked: !this.isEntitled(this.poster)
     };
+  },
+
+  /* ---------------------------- 会员 / 水印 / 付费 ---------------------------- */
+
+  // 会员有效，或这张照片已单张付费 => 无水印且可下载
+  isEntitled(item) {
+    return !!item.unlocked || membership.isActive(this.member);
+  },
+
+  memberView() {
+    return { isMember: membership.isActive(this.member), memberLabel: membership.label(this.member) };
+  },
+
+  // 权益变化后刷新标题栏 / 缩略图 / 预览水印
+  refreshEntitlement() {
+    this.setData(Object.assign(this.memberView(), this.listView()));
+    this.render();
+  },
+
+  openPaywall(resume) {
+    this._afterUnlock = resume || null;
+    this.setData(Object.assign(this.memberView(), { paywallVisible: true, inviteInput: '', inviteError: '' }));
+  },
+
+  onOpenPaywall() {
+    this.openPaywall(null);
+  },
+
+  onPaywallClose() {
+    this._afterUnlock = null;
+    this.setData({ paywallVisible: false });
+  },
+
+  // 权益生效后关闭付费面板，并继续刚才被拦下的操作
+  finishUnlock(toast) {
+    const resume = this._afterUnlock;
+    this._afterUnlock = null;
+    this.setData({ paywallVisible: false });
+    this.refreshEntitlement();
+    wx.showToast({ title: toast, icon: 'success' });
+    if (resume) setTimeout(resume, 400);
+  },
+
+  onInviteInput(e) {
+    this.setData({ inviteInput: e.detail.value, inviteError: '' });
+  },
+
+  async onRedeemInvite() {
+    const code = this.data.inviteInput;
+    if (!code.trim()) {
+      this.setData({ inviteError: '请输入邀请码' });
+      return;
+    }
+    let valid = false;
+    try {
+      valid = await payment.verifyInvite(code);
+    } catch (e) {
+      this.setData({ inviteError: '校验失败，请稍后重试' });
+      return;
+    }
+    if (!valid) {
+      this.setData({ inviteError: '邀请码无效' });
+      return;
+    }
+    this.member = Object.assign({}, this.member, { invite: true });
+    membership.save(this.member);
+    this.finishUnlock('邀请码已生效');
+  },
+
+  async onBuy(e) {
+    if (this.data.busy) return;
+    const { kind, id } = e.currentTarget.dataset;
+    let order;
+    let plan = null;
+    if (kind === 'plan') {
+      plan = appConfig.membership.plans.find((pl) => pl.id === id);
+      if (!plan) return;
+      order = { kind, planId: plan.id, title: plan.name, priceText: membership.formatPrice(plan.price) };
+    } else {
+      if (!this.data.hasPhoto) return;
+      const single = appConfig.membership.single;
+      order = { kind: 'single', title: single.name, priceText: membership.formatPrice(single.price) };
+    }
+    const target = this.poster;
+    let result;
+    try {
+      result = await payment.pay(order);
+    } catch (err) {
+      console.error('pay failed', err);
+      wx.showToast({ title: '支付失败，请重试', icon: 'none' });
+      return;
+    }
+    if (!result || !result.ok) return;
+    if (plan) {
+      this.member = membership.extend(this.member, plan.days);
+      membership.save(this.member);
+    } else {
+      target.unlocked = true;
+    }
+    this.finishUnlock('已解锁');
   },
 
   // 把当前条目的状态整体同步到界面
@@ -2219,7 +2369,8 @@ Page({
       mapAlpha: d.mapOpacity / 100,
       photoAlpha: d.photoOpacity / 100,
       textAlpha: d.textOpacity / 100,
-      crop: item.crops[item.templateId] || DEFAULT_CROP
+      crop: item.crops[item.templateId] || DEFAULT_CROP,
+      watermark: !this.isEntitled(item)
     };
   },
 
@@ -2296,12 +2447,36 @@ Page({
     return tempFilePath;
   },
 
+  // 免费版不支持下载：只放行已解锁的照片；没有可下载的就弹出付费面板，解锁后自动继续
+  async requestSave(items, resume) {
+    if (this.data.busy || !items.length) return;
+    const allowed = items.filter((it) => this.isEntitled(it));
+    if (!allowed.length) {
+      this.openPaywall(resume);
+      return;
+    }
+    if (allowed.length < items.length) {
+      const res = await wxp('showModal', {
+        title: '部分照片未解锁',
+        content: `有 ${items.length - allowed.length} 张照片未解锁（带水印，无法下载）。是否仅下载已解锁的 ${allowed.length} 张？`,
+        confirmText: '仅下载已解锁',
+        cancelText: '去解锁',
+        confirmColor: '#111111'
+      }).catch(() => ({ confirm: false }));
+      if (!res.confirm) {
+        this.openPaywall(resume);
+        return;
+      }
+    }
+    return this.saveItems(allowed);
+  },
+
   onSavePoster() {
     if (!this.data.hasPhoto) {
       wx.showToast({ title: '请先选择照片', icon: 'none' });
       return;
     }
-    return this.saveItems([this.poster]);
+    return this.requestSave([this.poster], () => this.onSavePoster());
   },
 
   onSaveSelected() {
@@ -2310,7 +2485,7 @@ Page({
       wx.showToast({ title: '请先勾选要下载的照片', icon: 'none' });
       return;
     }
-    return this.saveItems(picked);
+    return this.requestSave(picked, () => this.onSaveSelected());
   },
 
   onSaveAll() {
@@ -2318,7 +2493,7 @@ Page({
       wx.showToast({ title: '请先选择照片', icon: 'none' });
       return;
     }
-    return this.saveItems(this.items.slice());
+    return this.requestSave(this.items.slice(), () => this.onSaveAll());
   },
 
   // 逐张导出并保存到相册；相册权限被拒绝时立即终止，其余失败计入统计
