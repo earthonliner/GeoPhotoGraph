@@ -1370,6 +1370,8 @@ Page({
     singleOffer: Object.assign({ priceText: membership.formatPrice(appConfig.membership.single.price) }, appConfig.membership.single),
     inviteInput: '',
     inviteError: '',
+    paywallNotice: '',
+    packLines: [],
     mockPay: payment.isMock(),
     categories: CATEGORIES,
     catId: HOT_CATEGORY,
@@ -1535,13 +1537,44 @@ Page({
 
   /* ---------------------------- 会员 / 水印 / 付费 ---------------------------- */
 
-  // 会员有效，或这张照片已单张付费 => 无水印且可下载
+  // 这张照片已解锁（单张付费 / 已消耗过额度），或会员还有剩余额度 => 无水印且可下载
   isEntitled(item) {
-    return !!item.unlocked || membership.isActive(this.member);
+    return !!item.unlocked || membership.remainingQuota(this.member) > 0;
   },
 
   memberView() {
-    return { isMember: membership.isActive(this.member), memberLabel: membership.label(this.member) };
+    return {
+      isMember: membership.remainingQuota(this.member) > 0,
+      memberLabel: membership.label(this.member),
+      packLines: membership.packLines(this.member, appConfig.membership.plans)
+    };
+  },
+
+  // 一次下载要处理的照片中，哪些可以下载、哪些被额度 / 水印拦下
+  splitByEntitlement(items) {
+    let remaining = membership.remainingQuota(this.member);
+    const allowed = [];
+    const blocked = [];
+    items.forEach((it) => {
+      if (it.unlocked) {
+        allowed.push(it);
+      } else if (remaining > 0) {
+        allowed.push(it);
+        remaining -= 1;
+      } else {
+        blocked.push(it);
+      }
+    });
+    return { allowed, blocked };
+  },
+
+  // 保存成功后扣减额度；该照片本次会话内再次保存不重复计费
+  chargeItem(item) {
+    if (item.unlocked) return;
+    item.unlocked = true;
+    if (this.member.invite) return;
+    this.member = membership.consume(this.member, 1);
+    membership.save(this.member);
   },
 
   // 权益变化后刷新标题栏 / 缩略图 / 预览水印
@@ -1550,9 +1583,11 @@ Page({
     this.render();
   },
 
-  openPaywall(resume) {
+  openPaywall(resume, notice) {
     this._afterUnlock = resume || null;
-    this.setData(Object.assign(this.memberView(), { paywallVisible: true, inviteInput: '', inviteError: '' }));
+    this.setData(
+      Object.assign(this.memberView(), { paywallVisible: true, paywallNotice: notice || '', inviteInput: '', inviteError: '' })
+    );
   },
 
   onOpenPaywall() {
@@ -1625,7 +1660,7 @@ Page({
     }
     if (!result || !result.ok) return;
     if (plan) {
-      this.member = membership.extend(this.member, plan.days);
+      this.member = membership.addPack(this.member, plan);
       membership.save(this.member);
     } else {
       target.unlocked = true;
@@ -2447,24 +2482,32 @@ Page({
     return tempFilePath;
   },
 
-  // 免费版不支持下载：只放行已解锁的照片；没有可下载的就弹出付费面板，解锁后自动继续
+  // 无剩余额度且未解锁的照片不能下载：全部被拦下就弹出付费面板，部分被拦下则询问；
+  // 购买 / 兑换成功后自动继续刚才的操作
   async requestSave(items, resume) {
     if (this.data.busy || !items.length) return;
-    const allowed = items.filter((it) => this.isEntitled(it));
+    const { allowed, blocked } = this.splitByEntitlement(items);
+    const bought = this.member.bought;
+    const exhausted = bought
+      ? '额度已用完或已到期，购买额外的月度或年度会员即可继续下载。'
+      : '';
     if (!allowed.length) {
-      this.openPaywall(resume);
+      this.openPaywall(resume, exhausted);
       return;
     }
-    if (allowed.length < items.length) {
+    if (blocked.length) {
+      const notice = bought
+        ? `本次需下载 ${items.length} 张，剩余额度只够 ${allowed.length} 张。购买额外的月度或年度会员可继续下载其余 ${blocked.length} 张。`
+        : `有 ${blocked.length} 张照片未解锁（带水印，无法下载）。`;
       const res = await wxp('showModal', {
-        title: '部分照片未解锁',
-        content: `有 ${items.length - allowed.length} 张照片未解锁（带水印，无法下载）。是否仅下载已解锁的 ${allowed.length} 张？`,
-        confirmText: '仅下载已解锁',
-        cancelText: '去解锁',
+        title: bought ? '会员额度不足' : '部分照片未解锁',
+        content: `${notice}\n是否仅下载可下载的 ${allowed.length} 张？`,
+        confirmText: `仅下载 ${allowed.length} 张`,
+        cancelText: bought ? '购买额外会员' : '去解锁',
         confirmColor: '#111111'
       }).catch(() => ({ confirm: false }));
       if (!res.confirm) {
-        this.openPaywall(resume);
+        this.openPaywall(resume, bought ? notice : '');
         return;
       }
     }
@@ -2511,6 +2554,7 @@ Page({
         const filePath = await this.exportItem(items[i]);
         await wxp('saveImageToPhotosAlbum', { filePath });
         ok += 1;
+        this.chargeItem(items[i]);
       } catch (e) {
         if (isCancel(e)) {
           break;
@@ -2524,6 +2568,7 @@ Page({
       }
     }
     this.hideBusy();
+    if (ok) this.refreshEntitlement();
 
     if (denied) {
       const res = await wxp('showModal', {

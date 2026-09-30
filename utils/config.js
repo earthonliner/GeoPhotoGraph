@@ -26,12 +26,12 @@ module.exports = {
   membership: {
     // 邀请码（不区分大小写）。仅在客户端校验，正式上线请改为服务端校验（见 README「会员」）
     inviteCodes: ['geo0930'],
-    // price 单位：分
+    // price 单位：分；quota 为有效期内可下载的无水印海报张数，可多次购买叠加
     plans: [
-      { id: 'month', name: '月度会员', desc: '30 天内无水印、不限张数下载', price: 1900, days: 30 },
-      { id: 'year', name: '年度会员', desc: '365 天内无水印、不限张数下载', price: 9900, days: 365 }
+      { id: 'month', name: '月度会员', desc: '120 张 / 月，30 天内有效', price: 1490, days: 30, quota: 120 },
+      { id: 'year', name: '年度会员', desc: '2000 张 / 年，365 天内有效', price: 10990, days: 365, quota: 2000 }
     ],
-    single: { name: '单张解锁', desc: '仅解锁当前这张照片', price: 300 }
+    single: { name: '单张解锁', desc: '仅解锁当前这张照片', price: 129 }
   },
   payment: {
     // 'mock'：开发调试，弹窗确认后直接视为支付成功（不产生任何扣款）
