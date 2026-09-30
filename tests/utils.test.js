@@ -216,3 +216,27 @@ test('exif-parser: toDateValue for the date picker', () => {
   assert.strictEqual(exif.toDateValue(''), '');
   assert.strictEqual(exif.formatDate('2024-01-05'), 'JAN 05, 2024');
 });
+
+test('batch: random templates cycle through every template before repeating', () => {
+  const ids = ['a', 'b', 'c', 'd'];
+  const picked = require('../utils/batch').pickRandomTemplates(ids, 4);
+  assert.deepStrictEqual(picked.slice().sort(), ids);
+
+  const nine = require('../utils/batch').pickRandomTemplates(ids, 9);
+  assert.strictEqual(nine.length, 9);
+  assert.deepStrictEqual(nine.slice(0, 4).slice().sort(), ids);
+  assert.deepStrictEqual(nine.slice(4, 8).slice().sort(), ids);
+  for (let i = 1; i < nine.length; i += 1) assert.notStrictEqual(nine[i], nine[i - 1]);
+});
+
+test('batch: deterministic with a seeded random function and handles edge cases', () => {
+  const { pickRandomTemplates } = require('../utils/batch');
+  const seq = [0.1, 0.9, 0.5, 0.3];
+  let n = 0;
+  const rand = () => seq[n++ % seq.length];
+  const a = pickRandomTemplates(['x', 'y', 'z'], 3, rand);
+  n = 0;
+  assert.deepStrictEqual(pickRandomTemplates(['x', 'y', 'z'], 3, rand), a);
+  assert.deepStrictEqual(pickRandomTemplates(['only'], 3), ['only', 'only', 'only']);
+  assert.deepStrictEqual(pickRandomTemplates(['a', 'b'], 0), []);
+});

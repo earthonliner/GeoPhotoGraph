@@ -4,6 +4,7 @@ const placeName = require('../../utils/place-name');
 const themes = require('../../utils/themes');
 
 const { hexToRgba } = themes;
+const batchUtil = require('../../utils/batch');
 
 /* ------------------------------------------------------------------ */
 /* 常量与模板配置                                                       */
@@ -15,6 +16,7 @@ const POSTER_W = 400;
 const POSTER_H = (POSTER_W * 4) / 3;
 const EXPORT_SCALE = 3;
 const MAX_CROP_ZOOM = 4;
+const MAX_BATCH = 9;
 
 // 各模板中照片的取景区域（逻辑单位）；胶片 / 明信片的照片框固定，其余为整版或下半版
 const FILM_PHOTO = { left: 68, top: 50, w: 264, h: 368 };
@@ -1059,6 +1061,11 @@ function paintPoster(canvas, tplId, assets, info, style) {
 /* Page                                                                 */
 /* ------------------------------------------------------------------ */
 
+// 随机模板：用完一轮全部模板再开始下一轮
+function pickRandomTemplates(count) {
+  return batchUtil.pickRandomTemplates(TEMPLATES.map((t) => t.id), count);
+}
+
 Page({
   data: {
     templates: TEMPLATES,
@@ -1094,6 +1101,12 @@ Page({
     mapOpacity: 100,
     photoOpacity: 100,
     textOpacity: 100,
+    batchMode: 'unique',
+    maxBatch: MAX_BATCH,
+    list: [],
+    itemCount: 0,
+    selectedCount: 0,
+    currentId: 0,
     canvasStyle: '',
     busy: false,
     busyText: '',
@@ -1102,20 +1115,11 @@ Page({
 
   onLoad() {
     // 非 data 状态：与渲染无关，避免多余的 setData
-    this.poster = {
-      photoPath: '',
-      lat: null,
-      lon: null,
-      place: '',
-      fallbackName: '',
-      coordText: '',
-      dateText: ''
-    };
+    this.items = [];
+    this._itemSeq = 0;
+    this.poster = this.createItem('');
     this._hsv = themes.hexToHsv(themes.DEFAULT_CUSTOM_HEX);
     this._renderId = 0;
-    this.crops = {};
-    this._photoSize = null;
-    this._locId = 0;
     this._searchId = 0;
     this._geoCache = {};
     this._searchTimer = null;
@@ -1172,79 +1176,252 @@ Page({
     this.setData({ busy: false, busyText: '' });
   },
 
-  async onChoosePhoto() {
-    let filePath;
+  /* ---------------------------- 批量：条目模型 ---------------------------- */
+
+  // 每张照片是一个独立条目；this.poster 始终指向“当前正在编辑 / 预览”的条目
+  createItem(filePath, templateId) {
+    return {
+      id: ++this._itemSeq,
+      photoPath: filePath,
+      templateId: templateId || (this.poster && this.poster.templateId) || this.data.templateId,
+      selected: true,
+      lat: null,
+      lon: null,
+      place: '',
+      fallbackName: '',
+      placeManual: false,
+      coordText: '',
+      dateText: '',
+      dateValue: '',
+      dateManual: false,
+      autoDate: null,
+      crops: {},
+      photoSize: null,
+      locId: 0
+    };
+  },
+
+  listView() {
+    const list = this.items.map((it) => {
+      const tpl = TEMPLATES.find((t) => t.id === it.templateId);
+      return {
+        id: it.id,
+        path: it.photoPath,
+        selected: it.selected,
+        current: it === this.poster,
+        tplName: tpl ? tpl.name : '',
+        noLoc: it.lat === null
+      };
+    });
+    return {
+      list,
+      itemCount: list.length,
+      selectedCount: list.filter((x) => x.selected).length,
+      currentId: this.poster.id
+    };
+  },
+
+  // 把当前条目的状态整体同步到界面
+  syncView(extra) {
+    const p = this.poster;
+    const crop = this.getCrop(p.templateId);
+    this.setData(
+      Object.assign(
+        {
+          hasPhoto: !!p.photoPath,
+          photoPath: p.photoPath,
+          templateId: p.templateId,
+          hasLocation: p.lat !== null,
+          coordText: p.coordText,
+          place: p.place,
+          placeManual: p.placeManual,
+          dateText: p.dateText,
+          dateValue: p.dateValue,
+          dateManual: p.dateManual,
+          cropEnabled: !!CROP_REGIONS[p.templateId],
+          cropZoom: Math.round(crop.zoom * 100),
+          cropX: Math.round(crop.x * 100),
+          cropY: Math.round(crop.y * 100)
+        },
+        this.listView(),
+        extra
+      )
+    );
+  },
+
+  // 条目数据变化后刷新界面；当前条目还需要重绘预览
+  touch(item, redraw) {
+    if (item === this.poster) {
+      this.syncView();
+      if (redraw) this.render();
+    } else {
+      this.setData(this.listView());
+    }
+  },
+
+  /* ---------------------------- 批量：导入 / 切换 / 选择 ---------------------------- */
+
+  onChoosePhoto() {
+    return this.chooseAndImport(false);
+  },
+
+  onAddPhotos() {
+    return this.chooseAndImport(true);
+  },
+
+  async chooseAndImport(append) {
+    const remain = MAX_BATCH - (append ? this.items.length : 0);
+    if (remain <= 0) {
+      wx.showToast({ title: `最多 ${MAX_BATCH} 张`, icon: 'none' });
+      return;
+    }
+    let files;
     try {
       const res = await wxp('chooseMedia', {
-        count: 1,
+        count: remain,
         mediaType: ['image'],
         // 必须原图：压缩后的图片会丢失 EXIF（含 GPS）
         sizeType: ['original'],
         sourceType: ['album']
       });
-      filePath = res.tempFiles[0].tempFilePath;
+      files = res.tempFiles.map((f) => f.tempFilePath);
     } catch (e) {
       if (!isCancel(e)) wx.showToast({ title: '选择图片失败', icon: 'none' });
       return;
     }
 
     this.showBusy('读取照片信息…');
-    this._locId += 1;
-    this._imgCache = new Map();
-    this.crops = {};
-    this._photoSize = null;
-    this.poster = {
-      photoPath: filePath,
-      lat: null,
-      lon: null,
-      place: '',
-      fallbackName: '',
-      coordText: '',
-      dateText: ''
-    };
-
-    const exif = await exifParser.extractFromFile(filePath);
-    const autoDate = {
-      text: exif.dateText || exifParser.formatDate(new Date()),
-      value: exif.dateValue || exifParser.toDateValue(new Date())
-    };
-    this.poster.autoDate = autoDate;
-    this.poster.dateText = autoDate.text;
-
-    this.setData({
-      hasPhoto: true,
-      photoPath: filePath,
-      hasLocation: false,
-      coordText: '',
-      dateText: autoDate.text,
-      dateValue: autoDate.value,
-      dateManual: false,
-      place: '',
-      placeManual: false,
-      cropZoom: 100,
-      cropX: 0,
-      cropY: 0
-    });
-
-    if (exif.hasGps) {
-      await this.applyLocation(exif.latitude, exif.longitude, '');
-      this.hideBusy();
-      return;
+    const baseTemplate = this.poster.templateId;
+    const created = [];
+    for (const filePath of files) {
+      const item = this.createItem(filePath, baseTemplate);
+      const exif = await exifParser.extractFromFile(filePath);
+      item.autoDate = {
+        text: exif.dateText || exifParser.formatDate(new Date()),
+        value: exif.dateValue || exifParser.toDateValue(new Date())
+      };
+      item.dateText = item.autoDate.text;
+      item.dateValue = item.autoDate.value;
+      item.exif = exif;
+      created.push(item);
     }
 
-    this.hideBusy();
-    this.poster.place = 'UNKNOWN';
-    this.setData({ place: 'UNKNOWN' });
+    this.items = append ? this.items.concat(created) : created;
+    if (this.data.batchMode === 'random' && this.items.length > 1) {
+      pickRandomTemplates(created.length).forEach((id, i) => {
+        created[i].templateId = id;
+      });
+    }
+    this.poster = created[0];
+    this._imgCache = new Map();
+    this.syncView();
     this.render();
 
-    const modal = await wxp('showModal', {
-      title: '未读取到位置',
-      content: '未读取到位置，请在地图上手动选择',
-      confirmText: '去选择',
-      cancelText: '暂不',
-      confirmColor: '#111111'
-    }).catch(() => ({ confirm: false }));
-    if (modal.confirm) await this.onPickLocation();
+    await Promise.all(
+      created.map((item) => {
+        const exif = item.exif;
+        delete item.exif;
+        if (exif.hasGps) return this.applyLocation(item, exif.latitude, exif.longitude, '');
+        item.place = 'UNKNOWN';
+        this.touch(item, true);
+        return null;
+      })
+    );
+    this.hideBusy();
+
+    const missing = created.filter((it) => it.lat === null);
+    if (!missing.length) return;
+    if (created.length === 1) {
+      const modal = await wxp('showModal', {
+        title: '未读取到位置',
+        content: '未读取到位置，请在地图上手动选择',
+        confirmText: '去选择',
+        cancelText: '暂不',
+        confirmColor: '#111111'
+      }).catch(() => ({ confirm: false }));
+      if (modal.confirm) await this.onPickLocation();
+    } else {
+      wxp('showModal', {
+        title: '部分照片未读取到位置',
+        content: `有 ${missing.length} 张照片没有位置信息（缩略图上标有“无位置”），点选该照片后可手动选择位置。`,
+        showCancel: false,
+        confirmColor: '#111111'
+      }).catch(() => {});
+    }
+  },
+
+  findItem(id) {
+    return this.items.find((it) => it.id === Number(id));
+  },
+
+  onTapItem(e) {
+    const item = this.findItem(e.currentTarget.dataset.id);
+    if (!item || item === this.poster) return;
+    this.poster = item;
+    this.syncView();
+    this.render();
+  },
+
+  onToggleSelect(e) {
+    const item = this.findItem(e.currentTarget.dataset.id);
+    if (!item) return;
+    item.selected = !item.selected;
+    this.setData(this.listView());
+  },
+
+  onToggleSelectAll() {
+    const all = this.items.every((it) => it.selected);
+    this.items.forEach((it) => {
+      it.selected = !all;
+    });
+    this.setData(this.listView());
+  },
+
+  onRemoveItem(e) {
+    const item = this.findItem(e.currentTarget.dataset.id);
+    if (!item) return;
+    const idx = this.items.indexOf(item);
+    this.items.splice(idx, 1);
+    item.locId += 1;
+    this._imgCache.delete(item.photoPath);
+    if (item === this.poster) {
+      this.poster = this.items[Math.min(idx, this.items.length - 1)] || this.createItem('', item.templateId);
+      this.syncView();
+      this.render();
+    } else {
+      this.setData(this.listView());
+    }
+  },
+
+  // 统一模板：全部使用同一个；随机：每张各不相同（用完一轮再开始下一轮）
+  onBatchModeChange(e) {
+    const mode = e.currentTarget.dataset.mode;
+    if (mode === this.data.batchMode) return;
+    this.setData({ batchMode: mode }, () => {
+      if (mode === 'random') this.reshuffle();
+      else this.applyTemplateToAll(this.poster.templateId);
+    });
+  },
+
+  onReshuffle() {
+    this.reshuffle();
+  },
+
+  reshuffle() {
+    pickRandomTemplates(this.items.length).forEach((id, i) => {
+      this.items[i].templateId = id;
+    });
+    this.syncView();
+    this.render();
+  },
+
+  applyTemplateToAll(templateId) {
+    this.items.forEach((it) => {
+      it.templateId = templateId;
+    });
+    this.poster.templateId = templateId;
+    this.syncView();
+    this.render();
   },
 
   async onPickLocation() {
@@ -1285,7 +1462,7 @@ Page({
     // chooseLocation 返回 GCJ-02，需转换为 WGS-84 才能与 Mapbox 对齐
     const wgs = mapService.gcj02ToWgs84(loc.latitude, loc.longitude);
     this.showBusy('生成海报…');
-    await this.applyLocation(wgs.lat, wgs.lon, loc.name || '');
+    await this.applyLocation(this.poster, wgs.lat, wgs.lon, loc.name || '');
     this.hideBusy();
   },
 
@@ -1330,7 +1507,7 @@ Page({
     if (!hit) return;
     this.onSearchClose();
     this.showBusy('生成海报…');
-    await this.applyLocation(hit.lat, hit.lon, hit.name);
+    await this.applyLocation(this.poster, hit.lat, hit.lon, hit.name);
     this.hideBusy();
   },
 
@@ -1339,47 +1516,56 @@ Page({
   onPlaceInput(e) {
     const value = e.detail.value;
     this.poster.place = value;
+    this.poster.placeManual = true;
     this.setData({ place: value, placeManual: true });
     clearTimeout(this._placeTimer);
     this._placeTimer = setTimeout(() => this.render(), 200);
   },
 
   onPlaceReset() {
-    if (this.data.hasLocation) {
-      this.resolvePlace(++this._locId);
+    const item = this.poster;
+    if (item.lat !== null) {
+      this.resolvePlace(item, ++item.locId);
     } else {
-      this.poster.place = 'UNKNOWN';
-      this.setData({ place: 'UNKNOWN', placeManual: false });
-      this.render();
+      item.place = 'UNKNOWN';
+      item.placeManual = false;
+      this.touch(item, true);
     }
   },
 
+  // 地名语言是全局设置：所有照片一起重新解析
   onPlaceLangChange(e) {
     const lang = e.currentTarget.dataset.lang;
     if (lang === this.data.placeLang) return;
     this.setData({ placeLang: lang }, () => {
-      if (this.data.hasLocation) this.resolvePlace(++this._locId);
+      this.items.forEach((item) => {
+        if (item.lat !== null) this.resolvePlace(item, ++item.locId);
+      });
     });
   },
 
   onTapTemplate(e) {
     const id = e.currentTarget.dataset.id;
-    if (id === this.data.templateId) return;
-    this.setData({ templateId: id }, () => {
-      this.syncCropData();
+    if (id === this.poster.templateId) return;
+    // 统一模板模式下作用于全部照片；随机模式下只改当前这张
+    if (this.data.batchMode === 'unique') {
+      this.applyTemplateToAll(id);
+    } else {
+      this.poster.templateId = id;
+      this.syncView();
       this.render();
-    });
+    }
   },
 
   /* ---------------------------- 照片取景（拖动 / 缩放） ---------------------------- */
 
   getCrop(tplId) {
-    return this.crops[tplId] || DEFAULT_CROP;
+    return this.poster.crops[tplId] || DEFAULT_CROP;
   },
 
   setCrop(tplId, patch) {
     const cur = this.getCrop(tplId);
-    this.crops[tplId] = {
+    this.poster.crops[tplId] = {
       zoom: clamp(patch.zoom === undefined ? cur.zoom : patch.zoom, 1, MAX_CROP_ZOOM),
       x: clamp(patch.x === undefined ? cur.x : patch.x, -1, 1),
       y: clamp(patch.y === undefined ? cur.y : patch.y, -1, 1)
@@ -1388,7 +1574,7 @@ Page({
 
   // 把当前模板的取景参数同步到滑块
   syncCropData() {
-    const tplId = this.data.templateId;
+    const tplId = this.poster.templateId;
     const crop = this.getCrop(tplId);
     this.setData({
       cropEnabled: !!CROP_REGIONS[tplId],
@@ -1399,7 +1585,7 @@ Page({
   },
 
   onCropSlider(e) {
-    const tplId = this.data.templateId;
+    const tplId = this.poster.templateId;
     const key = e.currentTarget.dataset.key;
     const value = e.detail.value;
     if (key === 'cropZoom') this.setCrop(tplId, { zoom: value / 100 });
@@ -1410,15 +1596,15 @@ Page({
   },
 
   onResetCrop() {
-    delete this.crops[this.data.templateId];
+    delete this.poster.crops[this.poster.templateId];
     this.syncCropData();
     this.render();
   },
 
   onCanvasTouchStart(e) {
-    const tplId = this.data.templateId;
+    const tplId = this.poster.templateId;
     const region = CROP_REGIONS[tplId];
-    if (!region || !this._photoSize || !e.touches.length) return;
+    if (!region || !this.poster.photoSize || !e.touches.length) return;
 
     const t = e.touches[0];
     // 仅在照片区域内拖动才调整取景，避免误触其他区域
@@ -1438,9 +1624,9 @@ Page({
 
   onCanvasTouchMove(e) {
     const g = this._gesture;
-    if (!g || !this._photoSize) return;
+    if (!g || !this.poster.photoSize) return;
     const region = CROP_REGIONS[g.tplId];
-    const { w: iw, h: ih } = this._photoSize;
+    const { w: iw, h: ih } = this.poster.photoSize;
     const k = POSTER_W / this.cssSize.w;
 
     // 双指缩放
@@ -1591,17 +1777,15 @@ Page({
     const value = e.detail.value;
     const text = exifParser.formatDate(value);
     if (!text) return;
-    this.poster.dateText = text;
-    this.setData({ dateValue: value, dateText: text, dateManual: true });
-    this.render();
+    Object.assign(this.poster, { dateText: text, dateValue: value, dateManual: true });
+    this.touch(this.poster, true);
   },
 
   onDateReset() {
     const auto = this.poster.autoDate;
     if (!auto) return;
-    this.poster.dateText = auto.text;
-    this.setData({ dateValue: auto.value, dateText: auto.text, dateManual: false });
-    this.render();
+    Object.assign(this.poster, { dateText: auto.text, dateValue: auto.value, dateManual: false });
+    this.touch(this.poster, true);
   },
 
   onOpacityChanging(e) {
@@ -1636,22 +1820,23 @@ Page({
 
   /* ---------------------------- 位置与地名 ---------------------------- */
 
-  async applyLocation(lat, lon, fallbackName) {
-    const locId = ++this._locId;
+  async applyLocation(item, lat, lon, fallbackName) {
+    const locId = ++item.locId;
     const coords = exifParser.formatCoordinates(lat, lon);
-    this.poster.lat = lat;
-    this.poster.lon = lon;
-    this.poster.fallbackName = fallbackName || '';
-    this.poster.coordText = coords.text;
-    this.poster.place = 'LOCATING…';
-    this.setData({ hasLocation: true, coordText: coords.text, place: this.poster.place, placeManual: false });
-    await this.resolvePlace(locId);
+    item.lat = lat;
+    item.lon = lon;
+    item.fallbackName = fallbackName || '';
+    item.coordText = coords.text;
+    item.place = 'LOCATING…';
+    item.placeManual = false;
+    this.touch(item);
+    await this.resolvePlace(item, locId);
   },
 
   // 按当前语言设置解析地名：服务商结果 -> 备用名（如选点名称）-> UNKNOWN。
   // 英文模式下若拿到的是汉字，短名转拼音、长名转首字母缩写。
-  async resolvePlace(locId) {
-    const { lat, lon, fallbackName } = this.poster;
+  async resolvePlace(item, locId) {
+    const { lat, lon, fallbackName } = item;
     const lang = this.data.placeLang;
     const key = `${lat.toFixed(4)},${lon.toFixed(4)},${lang}`;
 
@@ -1660,19 +1845,18 @@ Page({
       geo = await mapService.reverseGeocode(lat, lon, lang);
       if (geo) this._geoCache[key] = geo;
     }
-    if (locId !== this._locId) return;
+    if (locId !== item.locId) return;
 
-    const place = placeName.normalizePlaceName((geo && geo.name) || fallbackName, lang) || 'UNKNOWN';
-    this.poster.place = place;
-    this.setData({ place, placeManual: false });
-    await this.render();
+    item.place = placeName.normalizePlaceName((geo && geo.name) || fallbackName, lang) || 'UNKNOWN';
+    item.placeManual = false;
+    this.touch(item, true);
   },
 
   /* ---------------------------- 渲染 ---------------------------- */
 
   // 下载当前模板/缩放对应的静态地图，失败时返回 null（画布回退到本地底图）
-  async ensureMapFile(tpl, dark) {
-    const { lat, lon } = this.poster;
+  async ensureMapFile(item, tpl, dark) {
+    const { lat, lon } = item;
     if (lat === null || lon === null) return null;
     const url = mapService.buildStaticMapUrl({
       lat,
@@ -1699,10 +1883,10 @@ Page({
     }
   },
 
-  async loadAssets(canvas, cache, tpl, style) {
+  async loadAssets(canvas, cache, tpl, style, item) {
     const [photo, mapPath] = await Promise.all([
-      cachedImage(canvas, cache, this.poster.photoPath),
-      this.ensureMapFile(tpl, style.theme.dark)
+      cachedImage(canvas, cache, item.photoPath),
+      this.ensureMapFile(item, tpl, style.theme.dark)
     ]);
     let map = null;
     if (mapPath) {
@@ -1715,26 +1899,25 @@ Page({
     return { photo, map };
   },
 
-  // 当前配色与不透明度（0~1）
-  buildStyle() {
+  // 配色与不透明度（0~1）为全局设置；取景按条目各自保存
+  buildStyle(item) {
     const d = this.data;
     return {
       theme: themes.resolveTheme(d.mapColorId, d.customHex),
       mapAlpha: d.mapOpacity / 100,
       photoAlpha: d.photoOpacity / 100,
       textAlpha: d.textOpacity / 100,
-      crop: this.getCrop(d.templateId)
+      crop: item.crops[item.templateId] || DEFAULT_CROP
     };
   },
 
-  buildInfo() {
-    const p = this.poster;
+  buildInfo(item) {
     const seed =
-      p.lat === null ? 7 : Math.floor((p.lat + 90) * 1000) * 397 + Math.floor((p.lon + 180) * 1000);
+      item.lat === null ? 7 : Math.floor((item.lat + 90) * 1000) * 397 + Math.floor((item.lon + 180) * 1000);
     return {
-      place: p.place || 'UNKNOWN',
-      coordText: p.coordText || '-- ° --  -- ° --',
-      dateText: p.dateText || '',
+      place: item.place || 'UNKNOWN',
+      coordText: item.coordText || '-- ° --  -- ° --',
+      dateText: item.dateText || '',
       seed
     };
   },
@@ -1743,18 +1926,24 @@ Page({
     if (!this.preview) return;
     const renderId = ++this._renderId;
     const canvas = this.preview;
-    const tplId = this.data.templateId;
+    const item = this.poster;
+    const tplId = item.templateId;
     const tpl = TEMPLATES.find((t) => t.id === tplId);
-    const style = this.buildStyle();
+    const style = this.buildStyle(item);
 
-    if (!this.poster.photoPath) {
+    if (!item.photoPath) {
       paintPoster(canvas, tplId, null, null, style);
       return;
     }
 
+    // 预览只缓存当前照片，避免批量时大图常驻内存
+    this.items.forEach((it) => {
+      if (it.photoPath !== item.photoPath) this._imgCache.delete(it.photoPath);
+    });
+
     let assets;
     try {
-      assets = await this.loadAssets(canvas, this._imgCache, tpl, style);
+      assets = await this.loadAssets(canvas, this._imgCache, tpl, style, item);
     } catch (e) {
       console.error('load assets failed', e);
       wx.showToast({ title: '图片加载失败', icon: 'none' });
@@ -1762,71 +1951,114 @@ Page({
     }
     // 期间用户切换了模板/照片：丢弃过期结果
     if (renderId !== this._renderId) return;
-    this._photoSize = { w: assets.photo.width, h: assets.photo.height };
-    paintPoster(canvas, tplId, assets, this.buildInfo(), style);
+    item.photoSize = { w: assets.photo.width, h: assets.photo.height };
+    paintPoster(canvas, tplId, assets, this.buildInfo(item), style);
   },
 
   /* ---------------------------- 导出 ---------------------------- */
 
-  async onSavePoster() {
+  // 渲染一张照片并导出为临时文件（1200 x 1600）
+  async exportItem(item) {
+    // 页面外的隐藏 canvas 作为离屏画布：物理尺寸 1200 x 1600（3 倍）
+    const canvas = await this.queryCanvas('#exportCanvas');
+    canvas.width = POSTER_W * EXPORT_SCALE;
+    canvas.height = Math.round(POSTER_H * EXPORT_SCALE);
+
+    const tpl = TEMPLATES.find((t) => t.id === item.templateId);
+    // 离屏画布不复用预览缓存，使用独立的 Image 对象
+    const style = this.buildStyle(item);
+    const assets = await this.loadAssets(canvas, null, tpl, style, item);
+    paintPoster(canvas, item.templateId, assets, this.buildInfo(item), style);
+
+    const { tempFilePath } = await wxp('canvasToTempFilePath', {
+      canvas,
+      x: 0,
+      y: 0,
+      width: canvas.width,
+      height: canvas.height,
+      destWidth: canvas.width,
+      destHeight: canvas.height,
+      fileType: 'jpg',
+      quality: 1
+    });
+    return tempFilePath;
+  },
+
+  onSavePoster() {
     if (!this.data.hasPhoto) {
       wx.showToast({ title: '请先选择照片', icon: 'none' });
       return;
     }
-    if (this.data.busy) return;
-    this.showBusy('生成高清海报…');
-
-    try {
-      // 页面外的隐藏 canvas 作为离屏画布：物理尺寸 1200 x 1600（3 倍）
-      const canvas = await this.queryCanvas('#exportCanvas');
-      canvas.width = POSTER_W * EXPORT_SCALE;
-      canvas.height = Math.round(POSTER_H * EXPORT_SCALE);
-
-      const tplId = this.data.templateId;
-      const tpl = TEMPLATES.find((t) => t.id === tplId);
-      // 离屏画布不复用预览缓存，使用独立的 Image 对象
-      const style = this.buildStyle();
-      const assets = await this.loadAssets(canvas, null, tpl, style);
-      paintPoster(canvas, tplId, assets, this.buildInfo(), style);
-
-      const { tempFilePath } = await wxp('canvasToTempFilePath', {
-        canvas,
-        x: 0,
-        y: 0,
-        width: canvas.width,
-        height: canvas.height,
-        destWidth: canvas.width,
-        destHeight: canvas.height,
-        fileType: 'jpg',
-        quality: 1
-      });
-
-      await this.saveToAlbum(tempFilePath);
-    } catch (e) {
-      console.error('export failed', e);
-      if (!isCancel(e)) wx.showToast({ title: '导出失败，请重试', icon: 'none' });
-    } finally {
-      this.hideBusy();
-    }
+    return this.saveItems([this.poster]);
   },
 
-  async saveToAlbum(filePath) {
-    try {
-      await wxp('saveImageToPhotosAlbum', { filePath });
-      wx.showToast({ title: '已保存到相册', icon: 'success' });
-    } catch (e) {
-      if (isCancel(e)) return;
-      if (/auth/i.test(e.errMsg || '')) {
-        const res = await wxp('showModal', {
-          title: '需要相册权限',
-          content: '请在设置中允许保存到相册后重试',
-          confirmText: '去设置',
-          confirmColor: '#111111'
-        }).catch(() => ({ confirm: false }));
-        if (res.confirm) wx.openSetting({});
-        return;
+  onSaveSelected() {
+    const picked = this.items.filter((it) => it.selected);
+    if (!picked.length) {
+      wx.showToast({ title: '请先勾选要下载的照片', icon: 'none' });
+      return;
+    }
+    return this.saveItems(picked);
+  },
+
+  onSaveAll() {
+    if (!this.items.length) {
+      wx.showToast({ title: '请先选择照片', icon: 'none' });
+      return;
+    }
+    return this.saveItems(this.items.slice());
+  },
+
+  // 逐张导出并保存到相册；相册权限被拒绝时立即终止，其余失败计入统计
+  async saveItems(items) {
+    if (this.data.busy || !items.length) return;
+    const total = items.length;
+    let ok = 0;
+    let fail = 0;
+    let denied = false;
+    this.showBusy(total > 1 ? `导出 1/${total}…` : '生成高清海报…');
+
+    for (let i = 0; i < total; i += 1) {
+      if (total > 1) this.setData({ busyText: `导出 ${i + 1}/${total}…` });
+      try {
+        const filePath = await this.exportItem(items[i]);
+        await wxp('saveImageToPhotosAlbum', { filePath });
+        ok += 1;
+      } catch (e) {
+        if (isCancel(e)) {
+          break;
+        }
+        if (/auth/i.test(e.errMsg || '')) {
+          denied = true;
+          break;
+        }
+        console.error('export failed', e);
+        fail += 1;
       }
-      throw e;
+    }
+    this.hideBusy();
+
+    if (denied) {
+      const res = await wxp('showModal', {
+        title: '需要相册权限',
+        content: ok ? `已保存 ${ok} 张，请在设置中允许保存到相册后继续` : '请在设置中允许保存到相册后重试',
+        confirmText: '去设置',
+        confirmColor: '#111111'
+      }).catch(() => ({ confirm: false }));
+      if (res.confirm) wx.openSetting({});
+      return;
+    }
+    if (!fail) {
+      if (ok) wx.showToast({ title: ok > 1 ? `已保存 ${ok} 张` : '已保存到相册', icon: 'success' });
+    } else if (!ok) {
+      wx.showToast({ title: '导出失败，请重试', icon: 'none' });
+    } else {
+      wxp('showModal', {
+        title: '部分导出失败',
+        content: `成功 ${ok} 张，失败 ${fail} 张，可重试失败的照片。`,
+        showCancel: false,
+        confirmColor: '#111111'
+      }).catch(() => {});
     }
   }
 });
