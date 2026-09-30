@@ -23,6 +23,14 @@ module.exports = {
   request: {
     timeout: 10000
   },
+  brand: {
+    // 海报底端品牌栏：GEOPICS 标识 + 小程序码。
+    // qrcode 填入小程序码图片路径（在小程序后台「设置 → 基本设置 / 开发管理」下载，放到 assets/ 下），
+    // 例如 '/assets/miniprogram-code.png'；留空或文件不存在时，右侧显示“微信搜索小程序 GeoPics”文字提示
+    qrcode: '',
+    tagline: 'MAP YOUR MOMENT',
+    searchName: 'GeoPics'
+  },
   membership: {
     // 邀请码（不区分大小写）。仅在客户端校验，正式上线请改为服务端校验（见 README「会员」）
     inviteCodes: ['geo0930'],

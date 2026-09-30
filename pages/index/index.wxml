@@ -162,6 +162,16 @@
     />
   </view>
 
+  <view class="card footer-card">
+    <view class="footer-row">
+      <view class="footer-text">
+        <text class="meta-label">BRAND FOOTER</text>
+        <text class="footer-desc">在海报底端拼接 GEOPICS 标识与小程序码，关闭则不拼接</text>
+      </view>
+      <switch checked="{{footerOn}}" color="#111111" bindchange="onToggleFooter" />
+    </view>
+  </view>
+
   <view wx:if="{{cropEnabled}}" class="card">
     <view class="zoom-head">
       <text class="meta-label">PHOTO CROP</text>
