@@ -56,7 +56,16 @@
   </view>
 
   <view class="preview">
-    <canvas id="posterCanvas" type="2d" class="poster" style="{{canvasStyle}}"></canvas>
+    <canvas
+      id="posterCanvas"
+      type="2d"
+      class="poster"
+      style="{{canvasStyle}}"
+      bindtouchstart="onCanvasTouchStart"
+      bindtouchmove="onCanvasTouchMove"
+      bindtouchend="onCanvasTouchEnd"
+      bindtouchcancel="onCanvasTouchEnd"
+    ></canvas>
     <view wx:if="{{busy}}" class="busy" style="{{canvasStyle}}">
       <text class="busy-text">{{busyText}}</text>
     </view>
@@ -82,6 +91,29 @@
       bindchanging="onZoomChanging"
       bindchange="onZoomChange"
     />
+  </view>
+
+  <view wx:if="{{cropEnabled}}" class="card">
+    <view class="zoom-head">
+      <text class="meta-label">PHOTO CROP</text>
+      <text class="link" bindtap="onResetCrop">重置</text>
+    </view>
+    <view class="crop-tip">在预览图的照片区域拖动可平移，双指可缩放；也可用下方滑块微调</view>
+    <view class="op-row">
+      <text class="op-name">缩放</text>
+      <slider class="op-slider" min="100" max="400" step="1" value="{{cropZoom}}" block-size="16" activeColor="#111111" backgroundColor="#dcdad5" data-key="cropZoom" bindchanging="onCropSlider" bindchange="onCropSlider" />
+      <text class="op-value">{{cropZoom}}%</text>
+    </view>
+    <view class="op-row">
+      <text class="op-name">左右</text>
+      <slider class="op-slider" min="-100" max="100" step="1" value="{{cropX}}" block-size="16" activeColor="#111111" backgroundColor="#dcdad5" data-key="cropX" bindchanging="onCropSlider" bindchange="onCropSlider" />
+      <text class="op-value">{{cropX}}</text>
+    </view>
+    <view class="op-row">
+      <text class="op-name">上下</text>
+      <slider class="op-slider" min="-100" max="100" step="1" value="{{cropY}}" block-size="16" activeColor="#111111" backgroundColor="#dcdad5" data-key="cropY" bindchanging="onCropSlider" bindchange="onCropSlider" />
+      <text class="op-value">{{cropY}}</text>
+    </view>
   </view>
 
   <view class="card">

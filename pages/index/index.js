@@ -14,6 +14,14 @@ const { hexToRgba } = themes;
 const POSTER_W = 400;
 const POSTER_H = (POSTER_W * 4) / 3;
 const EXPORT_SCALE = 3;
+const MAX_CROP_ZOOM = 4;
+
+// 支持取景调整（拖动 / 缩放）的模板及其照片区域（逻辑单位）
+const CROP_REGIONS = {
+  split: { top: POSTER_H * 0.4, w: POSTER_W, h: POSTER_H * 0.6 },
+  medallion: { top: 0, w: POSTER_W, h: POSTER_H }
+};
+const DEFAULT_CROP = { zoom: 1, x: 0, y: 0 };
 
 const SANS = '"Helvetica Neue", Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif';
 const SERIF = 'Georgia, "Times New Roman", "Songti SC", serif';
@@ -119,11 +127,26 @@ function fitFontSize(ctx, text, maxWidth, maxSize, minSize, weight, family, spac
   return size;
 }
 
-function drawImageCover(ctx, img, x, y, w, h) {
-  const r = Math.max(w / img.width, h / img.height);
+const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
+
+/**
+ * 计算 cover 裁切区域。crop = { zoom: 1~4, x: -1~1, y: -1~1 }：
+ * zoom 在“刚好铺满”的基础上放大；x / y 为取景窗口在可移动范围内的归一化位置
+ * （-1 = 最左 / 最上，0 = 居中，1 = 最右 / 最下），保证窗口永远不会越出图片。
+ */
+function coverRect(iw, ih, w, h, crop) {
+  const zoom = clamp((crop && crop.zoom) || 1, 1, MAX_CROP_ZOOM);
+  const r = Math.max(w / iw, h / ih) * zoom;
   const sw = w / r;
   const sh = h / r;
-  ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, x, y, w, h);
+  const cx = iw / 2 + clamp((crop && crop.x) || 0, -1, 1) * ((iw - sw) / 2);
+  const cy = ih / 2 + clamp((crop && crop.y) || 0, -1, 1) * ((ih - sh) / 2);
+  return { sx: cx - sw / 2, sy: cy - sh / 2, sw, sh };
+}
+
+function drawImageCover(ctx, img, x, y, w, h, crop) {
+  const c = coverRect(img.width, img.height, w, h, crop);
+  ctx.drawImage(img, c.sx, c.sy, c.sw, c.sh, x, y, w, h);
 }
 
 function fitInside(img, maxW, maxH) {
@@ -316,7 +339,7 @@ function paintSplit(ctx, scale, assets, info, tpl, style) {
   // 地图铺满整张海报，照片不透明度 < 1 时下半部分会透出地图
   drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
   withAlpha(ctx, style.photoAlpha, () => {
-    drawImageCover(ctx, assets.photo, 0, mapH, W, H - mapH);
+    drawImageCover(ctx, assets.photo, 0, mapH, W, H - mapH, style.crop);
   });
 
   ctx.fillStyle = hexToRgba(ink, 0.75);
@@ -345,7 +368,7 @@ function paintMedallion(ctx, scale, assets, info, tpl, style) {
   drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
 
   withAlpha(ctx, style.photoAlpha, () => {
-    drawImageCover(ctx, assets.photo, 0, 0, W, H);
+    drawImageCover(ctx, assets.photo, 0, 0, W, H, style.crop);
     const gradTop = H * 0.52;
     const grad = ctx.createLinearGradient(0, gradTop, 0, H);
     grad.addColorStop(0, 'rgba(0,0,0,0)');
@@ -466,6 +489,10 @@ Page({
     mapColorId: themes.DEFAULT_THEME_ID,
     customHex: themes.DEFAULT_CUSTOM_HEX,
     customHexText: themes.DEFAULT_CUSTOM_HEX,
+    cropEnabled: false,
+    cropZoom: 100,
+    cropX: 0,
+    cropY: 0,
     mapOpacity: 100,
     photoOpacity: 100,
     textOpacity: 100,
@@ -487,6 +514,8 @@ Page({
       dateText: ''
     };
     this._renderId = 0;
+    this.crops = {};
+    this._photoSize = null;
     this._locId = 0;
     this._searchId = 0;
     this._geoCache = {};
@@ -563,6 +592,8 @@ Page({
     this.showBusy('读取照片信息…');
     this._locId += 1;
     this._imgCache = new Map();
+    this.crops = {};
+    this._photoSize = null;
     this.poster = {
       photoPath: filePath,
       lat: null,
@@ -583,7 +614,10 @@ Page({
       coordText: '',
       dateText: this.poster.dateText,
       place: '',
-      placeManual: false
+      placeManual: false,
+      cropZoom: 100,
+      cropX: 0,
+      cropY: 0
     });
 
     if (exif.hasGps) {
@@ -725,7 +759,127 @@ Page({
   onTapTemplate(e) {
     const id = e.currentTarget.dataset.id;
     if (id === this.data.templateId) return;
-    this.setData({ templateId: id }, () => this.render());
+    this.setData({ templateId: id }, () => {
+      this.syncCropData();
+      this.render();
+    });
+  },
+
+  /* ---------------------------- 照片取景（拖动 / 缩放） ---------------------------- */
+
+  getCrop(tplId) {
+    return this.crops[tplId] || DEFAULT_CROP;
+  },
+
+  setCrop(tplId, patch) {
+    const cur = this.getCrop(tplId);
+    this.crops[tplId] = {
+      zoom: clamp(patch.zoom === undefined ? cur.zoom : patch.zoom, 1, MAX_CROP_ZOOM),
+      x: clamp(patch.x === undefined ? cur.x : patch.x, -1, 1),
+      y: clamp(patch.y === undefined ? cur.y : patch.y, -1, 1)
+    };
+  },
+
+  // 把当前模板的取景参数同步到滑块
+  syncCropData() {
+    const tplId = this.data.templateId;
+    const crop = this.getCrop(tplId);
+    this.setData({
+      cropEnabled: !!CROP_REGIONS[tplId],
+      cropZoom: Math.round(crop.zoom * 100),
+      cropX: Math.round(crop.x * 100),
+      cropY: Math.round(crop.y * 100)
+    });
+  },
+
+  onCropSlider(e) {
+    const tplId = this.data.templateId;
+    const key = e.currentTarget.dataset.key;
+    const value = e.detail.value;
+    if (key === 'cropZoom') this.setCrop(tplId, { zoom: value / 100 });
+    if (key === 'cropX') this.setCrop(tplId, { x: value / 100 });
+    if (key === 'cropY') this.setCrop(tplId, { y: value / 100 });
+    this.setData({ [key]: value });
+    this.scheduleRender();
+  },
+
+  onResetCrop() {
+    delete this.crops[this.data.templateId];
+    this.syncCropData();
+    this.render();
+  },
+
+  onCanvasTouchStart(e) {
+    const tplId = this.data.templateId;
+    const region = CROP_REGIONS[tplId];
+    if (!region || !this._photoSize || !e.touches.length) return;
+
+    const t = e.touches[0];
+    // 拼接图仅在照片区域内拖动才调整取景，避免误触地图区
+    if (typeof t.y === 'number') {
+      const logicalY = (t.y * POSTER_W) / this.cssSize.w;
+      if (logicalY < region.top || logicalY > region.top + region.h) {
+        this._gesture = null;
+        return;
+      }
+    }
+    const crop = this.getCrop(tplId);
+    this._gesture = { tplId, start: crop, x: t.clientX, y: t.clientY, dist: 0 };
+    if (e.touches.length >= 2) this._gesture.dist = this.touchDistance(e.touches);
+  },
+
+  onCanvasTouchMove(e) {
+    const g = this._gesture;
+    if (!g || !this._photoSize) return;
+    const region = CROP_REGIONS[g.tplId];
+    const { w: iw, h: ih } = this._photoSize;
+    const k = POSTER_W / this.cssSize.w;
+
+    // 双指缩放
+    if (e.touches.length >= 2) {
+      const dist = this.touchDistance(e.touches);
+      if (!g.dist) {
+        g.dist = dist;
+        g.start = this.getCrop(g.tplId);
+      } else if (dist > 0) {
+        this.setCrop(g.tplId, { zoom: g.start.zoom * (dist / g.dist) });
+        this.scheduleRender();
+      }
+      return;
+    }
+
+    // 单指拖动：手指向右 => 取景窗口向左移动
+    const t = e.touches[0];
+    const cover = Math.max(region.w / iw, region.h / ih) * g.start.zoom;
+    const sw = region.w / cover;
+    const sh = region.h / cover;
+    const slackX = (iw - sw) / 2;
+    const slackY = (ih - sh) / 2;
+    const dx = (t.clientX - g.x) * k;
+    const dy = (t.clientY - g.y) * k;
+    this.setCrop(g.tplId, {
+      x: slackX > 0.5 ? g.start.x - (dx * (sw / region.w)) / slackX : g.start.x,
+      y: slackY > 0.5 ? g.start.y - (dy * (sh / region.h)) / slackY : g.start.y
+    });
+    this.scheduleRender();
+  },
+
+  onCanvasTouchEnd(e) {
+    if (!this._gesture) return;
+    if (e.touches && e.touches.length === 1) {
+      // 双指抬起一根：以剩余手指重新作为拖动起点
+      const t = e.touches[0];
+      this._gesture = { tplId: this._gesture.tplId, start: this.getCrop(this._gesture.tplId), x: t.clientX, y: t.clientY, dist: 0 };
+      return;
+    }
+    this._gesture = null;
+    this.syncCropData();
+  },
+
+  touchDistance(touches) {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
   },
 
   /* ---------------------------- 地图配色 / 不透明度 ---------------------------- */
@@ -867,7 +1021,8 @@ Page({
       theme: themes.resolveTheme(d.mapColorId, d.customHex),
       mapAlpha: d.mapOpacity / 100,
       photoAlpha: d.photoOpacity / 100,
-      textAlpha: d.textOpacity / 100
+      textAlpha: d.textOpacity / 100,
+      crop: this.getCrop(d.templateId)
     };
   },
 
@@ -906,6 +1061,7 @@ Page({
     }
     // 期间用户切换了模板/照片：丢弃过期结果
     if (renderId !== this._renderId) return;
+    this._photoSize = { w: assets.photo.width, h: assets.photo.height };
     paintPoster(canvas, tplId, assets, this.buildInfo(), style);
   },
 
