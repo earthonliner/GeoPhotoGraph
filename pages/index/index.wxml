@@ -263,7 +263,9 @@
         <text class="sheet-cancel" bindtap="onPaywallClose">关闭</text>
       </view>
       <view class="pw-status {{isMember ? 'pw-status-on' : ''}}">{{memberLabel}}</view>
-      <view class="pw-sub">免费版预览带水印，且不支持下载。解锁后可保存 1200 × 1600 无水印高清海报。</view>
+      <view wx:if="{{paywallNotice}}" class="pw-notice">{{paywallNotice}}</view>
+      <view wx:for="{{packLines}}" wx:key="*this" class="pw-pack">{{item}}</view>
+      <view class="pw-sub">免费版预览带水印，且不支持下载。解锁后可保存 1200 × 1600 无水印高清海报，每保存一张消耗 1 个额度（同一张照片再次保存不重复计费）。会员额度用完后，可再次购买月度或年度会员叠加使用。</view>
 
       <view wx:for="{{plans}}" wx:key="id" class="pw-plan" data-kind="plan" data-id="{{item.id}}" bindtap="onBuy">
         <view class="pw-plan-text">

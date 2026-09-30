@@ -241,42 +241,74 @@ test('batch: deterministic with a seeded random function and handles edge cases'
   assert.deepStrictEqual(pickRandomTemplates(['a', 'b'], 0), []);
 });
 
-test('membership: invite code, plans and expiry', () => {
+test('membership: invite code is case-insensitive and unlimited', () => {
   const m = require('../utils/membership');
   config.membership.inviteCodes = ['geo0930'];
   assert.ok(m.isValidInvite('geo0930'));
   assert.ok(m.isValidInvite('  GEO0930 '));
   assert.ok(!m.isValidInvite('geo0931'));
   assert.ok(!m.isValidInvite(''));
+  const invited = { invite: true, bought: false, packs: [] };
+  assert.strictEqual(m.remainingQuota(invited), Infinity);
+  assert.strictEqual(m.consume(invited, 5), invited);
+  assert.strictEqual(m.label(invited), '会员 · 邀请码');
+});
+
+test('membership: plans, prices and quota packs', () => {
+  const m = require('../utils/membership');
+  const { plans, single } = config.membership;
+  const month = plans.find((p) => p.id === 'month');
+  const year = plans.find((p) => p.id === 'year');
+  assert.deepStrictEqual([single.price, month.price, year.price], [129, 1490, 10990]);
+  assert.deepStrictEqual([month.quota, year.quota], [120, 2000]);
+  assert.deepStrictEqual([m.formatPrice(129), m.formatPrice(1490), m.formatPrice(10990), m.formatPrice(1900)], ['¥1.29', '¥14.9', '¥109.9', '¥19']);
 
   const now = Date.UTC(2026, 8, 30);
-  const free = { invite: false, until: 0 };
-  assert.ok(!m.isActive(free, now));
-  assert.ok(m.isActive({ invite: true, until: 0 }, now));
-
-  const month = m.extend(free, 30, now);
-  assert.strictEqual(month.until, now + 30 * m.DAY);
-  assert.ok(m.isActive(month, now + 29 * m.DAY));
-  assert.ok(!m.isActive(month, now + 31 * m.DAY));
-  // 未到期时续费从到期日顺延
-  assert.strictEqual(m.extend(month, 30, now + 10 * m.DAY).until, now + 60 * m.DAY);
-  // 已过期后续费从当前时间开始
-  assert.strictEqual(m.extend(month, 30, now + 90 * m.DAY).until, now + 120 * m.DAY);
-
+  const free = { invite: false, bought: false, packs: [] };
+  assert.strictEqual(m.remainingQuota(free, now), 0);
   assert.strictEqual(m.label(free, now), '免费版 · 开通会员');
-  assert.strictEqual(m.label({ invite: true, until: 0 }, now), '会员 · 邀请码');
-  assert.ok(m.label(month, now).startsWith('会员 · '));
-  assert.strictEqual(m.formatPrice(1900), '¥19');
-  assert.strictEqual(m.formatPrice(350), '¥3.50');
+
+  const s1 = m.addPack(free, month, now);
+  assert.strictEqual(m.remainingQuota(s1, now), 120);
+  assert.strictEqual(m.label(s1, now), '会员 · 剩余 120 张');
+  // 有效期
+  assert.strictEqual(m.remainingQuota(s1, now + 29 * m.DAY), 120);
+  assert.strictEqual(m.remainingQuota(s1, now + 31 * m.DAY), 0);
+  assert.strictEqual(m.label(s1, now + 31 * m.DAY), '额度已用完 · 续购');
+
+  // 消耗额度
+  const s2 = m.consume(s1, 20, now);
+  assert.strictEqual(m.remainingQuota(s2, now), 100);
+  assert.strictEqual(s1.packs[0].used, 0, 'consume does not mutate');
+  const s3 = m.consume(s2, 100, now);
+  assert.strictEqual(m.remainingQuota(s3, now), 0);
+  assert.strictEqual(m.label(s3, now), '额度已用完 · 续购');
+  assert.strictEqual(m.remainingQuota(m.consume(s3, 5, now), now), 0);
+
+  // 额外购买：叠加，优先扣最早到期的包
+  const s4 = m.addPack(m.addPack(s2, year, now + 5 * m.DAY), month, now + 10 * m.DAY);
+  assert.strictEqual(m.remainingQuota(s4, now + 10 * m.DAY), 100 + 2000 + 120);
+  const s5 = m.consume(s4, 110, now + 10 * m.DAY);
+  const byPlan = (st, id, i) => st.packs.filter((p) => p.planId === id)[i || 0];
+  assert.strictEqual(byPlan(s5, 'month', 0).used, 120, 'earliest expiring pack is used first');
+  assert.strictEqual(byPlan(s5, 'year').used, 0);
+  assert.strictEqual(byPlan(s5, 'month', 1).used, 10, 'then the next earliest');
+  assert.strictEqual(m.remainingQuota(s5, now + 10 * m.DAY), 2000 + 110);
+  // 过期的包在下次购买时被清理
+  assert.strictEqual(m.addPack(s1, year, now + 40 * m.DAY).packs.length, 1);
+  assert.ok(m.packLines(s2, plans, now)[0].startsWith('月度会员 剩余 100/120 张'));
 });
 
 test('membership: state persists through storage and ignores garbage', () => {
   const m = require('../utils/membership');
   const data = {};
   const storage = { get: (k) => data[k], set: (k, v) => { data[k] = v; } };
-  assert.deepStrictEqual(m.load(storage), { invite: false, until: 0 });
-  m.save({ invite: true, until: 123 }, storage);
-  assert.deepStrictEqual(m.load(storage), { invite: true, until: 123 });
+  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, packs: [] });
+  const state = { invite: true, bought: true, packs: [{ planId: 'month', quota: 120, used: 3, until: 999 }] };
+  m.save(state, storage);
+  assert.deepStrictEqual(m.load(storage), state);
   data['geopics.membership'] = 'oops';
-  assert.deepStrictEqual(m.load(storage), { invite: false, until: 0 });
+  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, packs: [] });
+  data['geopics.membership'] = { invite: false, until: 123 };
+  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, packs: [] });
 });
