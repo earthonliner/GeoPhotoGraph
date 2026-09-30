@@ -98,6 +98,7 @@ function downloadImage(url) {
 /* ------------------------------------------------------------------ */
 
 const PLACE_PRIORITY = ['place', 'locality', 'district', 'region', 'country'];
+const GEOCODE_TYPES = PLACE_PRIORITY.concat(['neighborhood']);
 
 // 'en' -> 英文；'zh' -> 简体中文。Mapbox 在目标语言缺失时会回退为当地语言。
 function mapboxLanguage(lang) {
@@ -135,15 +136,30 @@ function pickPlaceFeature(features) {
 async function reverseGeocode(lat, lon, lang) {
   if (!hasToken()) return null;
   const features = await geocodingRequest(`${lon.toFixed(6)},${lat.toFixed(6)}`, {
-    types: PLACE_PRIORITY.join(','),
+    types: GEOCODE_TYPES.join(','),
     language: mapboxLanguage(lang)
   });
   const picked = pickPlaceFeature(features);
   if (!picked) return null;
+
+  // 各层级的名称：先取顶层结果，缺失的再从所选结果的 context 中补全
+  const parts = {};
+  const typeKey = { place: 'city', locality: 'locality', district: 'district', region: 'region', country: 'country', neighborhood: 'neighborhood' };
+  features.forEach((f) => {
+    (f.place_type || []).forEach((t) => {
+      if (typeKey[t] && !parts[typeKey[t]]) parts[typeKey[t]] = String(f.text || '');
+    });
+  });
+  (picked.context || []).forEach((c) => {
+    const t = String(c.id || '').split('.')[0];
+    if (typeKey[t] && !parts[typeKey[t]]) parts[typeKey[t]] = String(c.text || '');
+  });
   const country = (picked.context || []).find((c) => /^country/.test(c.id || ''));
   return {
+    // name 为“城市级”名称（向后兼容）；更细的层级见 parts，由 place-name.formatPlace 组合
     name: String(picked.text || ''),
-    country: country ? String(country.text || '') : ''
+    country: country ? String(country.text || '') : parts.country || '',
+    parts
   };
 }
 

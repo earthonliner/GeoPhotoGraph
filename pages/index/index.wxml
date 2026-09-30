@@ -35,6 +35,13 @@
           <text wx:if="{{placeManual}}" class="link" bindtap="onPlaceReset">恢复自动地名</text>
         </view>
       </view>
+      <view class="place-tools">
+        <text class="meta-label">RANGE</text>
+        <view class="seg">
+          <view class="seg-item {{placeLevel === 'city' ? 'seg-active' : ''}}" data-level="city" bindtap="onPlaceLevelChange">仅城市</view>
+          <view class="seg-item {{placeLevel === 'detail' ? 'seg-active' : ''}}" data-level="detail" bindtap="onPlaceLevelChange">含区域</view>
+        </view>
+      </view>
       <view class="meta-row">
         <text class="meta-label">COORD</text>
         <text class="meta-value">{{hasLocation ? coordText : '未获取位置'}}</text>

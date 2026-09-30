@@ -156,7 +156,7 @@ test('map-service: reverse geocode / search use requested language', async () =>
     }
   };
   const geo = await mapService.reverseGeocode(46.0192, 7.7459, 'zh');
-  assert.deepStrictEqual(geo, { name: 'Zermatt', country: 'Switzerland' });
+  assert.deepStrictEqual(geo, { name: 'Zermatt', country: 'Switzerland', parts: { country: 'Switzerland', city: 'Zermatt' } });
   assert.ok(urls[0].includes('language=zh-Hans'));
   const list = await mapService.searchPlaces('Matterhorn', 'en');
   assert.deepStrictEqual(list, [{ name: 'Matterhorn', address: 'Matterhorn, Zermatt', lon: 7.65, lat: 45.97 }]);
@@ -311,4 +311,34 @@ test('membership: state persists through storage and ignores garbage', () => {
   assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, packs: [] });
   data['geopics.membership'] = { invite: false, until: 123 };
   assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, packs: [] });
+});
+
+test('place-name: long city names drop German/English qualifiers', () => {
+  const pn = require('../utils/place-name');
+  assert.strictEqual(pn.shortenCityName('St. Wolfgang im Salzkammergut'), 'St. Wolfgang');
+  assert.strictEqual(pn.shortenCityName('Frankfurt am Main'), 'Frankfurt');
+  assert.strictEqual(pn.shortenCityName('Newcastle upon Tyne'), 'Newcastle');
+  assert.strictEqual(pn.shortenCityName('Rothenburg ob der Tauber'), 'Rothenburg');
+  // 短名、无限定词的长名、汉字名保持原样
+  assert.strictEqual(pn.shortenCityName('Weil am Rhein'), 'Weil am Rhein');
+  assert.strictEqual(pn.shortenCityName('San Francisco Bay Area'), 'San Francisco Bay Area');
+  assert.strictEqual(pn.shortenCityName('杭州市西湖区'), '杭州市西湖区');
+});
+
+test('place-name: formatPlace shows city only by default, region on demand', () => {
+  const pn = require('../utils/place-name');
+  const parts = { city: 'St. Wolfgang im Salzkammergut', locality: 'Ried', district: 'Gmunden', region: 'Upper Austria', country: 'Austria' };
+  assert.strictEqual(pn.formatPlace(parts, 'city', 'en'), 'ST. WOLFGANG');
+  assert.strictEqual(pn.formatPlace(parts, 'detail', 'en'), 'RIED, ST. WOLFGANG');
+  // 没有城市时依次退到 locality / district / region / country
+  assert.strictEqual(pn.formatPlace({ locality: 'Hallstatt', region: 'Upper Austria' }, 'city', 'en'), 'HALLSTATT');
+  assert.strictEqual(pn.formatPlace({ district: 'Gmunden', country: 'Austria' }, 'city', 'en'), 'GMUNDEN');
+  assert.strictEqual(pn.formatPlace({ country: 'Austria' }, 'city', 'en'), 'AUSTRIA');
+  assert.strictEqual(pn.formatPlace({}, 'city', 'en'), '');
+  // 详细层级与城市相同则不重复
+  assert.strictEqual(pn.formatPlace({ city: 'Zermatt', locality: 'Zermatt' }, 'detail', 'en'), 'ZERMATT');
+  // 中文：城市 + 区域；英文模式下汉字按既有规则转拼音 / 首字母
+  assert.strictEqual(pn.formatPlace({ city: '杭州市', district: '西湖区' }, 'detail', 'zh'), '杭州市西湖区');
+  assert.strictEqual(pn.formatPlace({ city: '杭州市', district: '西湖区' }, 'city', 'en'), 'HANGZHOU');
+  assert.strictEqual(pn.formatPlace({ city: '北京市', district: '朝阳区' }, 'detail', 'en'), 'CHAOYANG, BEIJING');
 });
