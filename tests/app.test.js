@@ -29,6 +29,31 @@ test('WXML 中绑定的事件处理函数都定义在页面上', () => {
   }
 });
 
+test('app.js：cloud 模式启动时初始化云开发，朋友圈单页模式与本地模式不初始化', () => {
+  const config = require('../utils/config');
+  const mode = config.payment.mode;
+  const launch = (scene) => {
+    const inits = [];
+    const wx = createWx({ getEnterOptionsSync: () => ({ scene }), cloud: { init: (o) => inits.push(o) } });
+    global.wx = wx;
+    let app = null;
+    new Function('require', 'App', 'wx', read('app.js'))((p) => require(path.join(ROOT, p)), (def) => {
+      app = def;
+    }, wx);
+    app.onLaunch();
+    return inits;
+  };
+  try {
+    config.payment.mode = 'cloud';
+    assert.deepStrictEqual(launch(1001), [{ env: config.payment.cloud.env, traceUser: true }]);
+    assert.deepStrictEqual(launch(1154), []);
+    config.payment.mode = 'mock';
+    assert.deepStrictEqual(launch(1001), []);
+  } finally {
+    config.payment.mode = mode;
+  }
+});
+
 test('代码里跳转的页面都已在 app.json 注册', () => {
   for (const p of APP.pages) {
     const urls = [...read(`${p}.js`).matchAll(/url:\s*'\/(pages\/[\w/]+)'/g)].map((m) => m[1]);
