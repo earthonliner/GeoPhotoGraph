@@ -19,7 +19,7 @@ const {
 
 // 预览按屏幕 dpr 缩放，导出按 3 倍缩放 => 1200 x 1600 px
 const EXPORT_SCALE = 3;
-const MAX_BATCH = 9;
+const { MAX_BATCH } = batchUtil;
 const FOOTER_KEY = 'geopics.footer';
 
 const posterHeight = (footer) => POSTER_H + (footer ? FOOTER_H : 0);

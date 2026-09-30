@@ -45,4 +45,13 @@ function isDevBuild() {
   return envVersion() !== 'release';
 }
 
-module.exports = { SINGLE_PAGE_SCENE, platform, canPurchase, isSinglePageMode, envVersion, isDevBuild };
+// 线上版本号，如 '1.0.0'；只有正式版有值
+function version() {
+  try {
+    return wx.getAccountInfoSync().miniProgram.version || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+module.exports = { SINGLE_PAGE_SCENE, platform, canPurchase, isSinglePageMode, envVersion, isDevBuild, version };
