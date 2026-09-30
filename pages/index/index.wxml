@@ -5,7 +5,10 @@
         <image class="brand-logo" src="/assets/logo.png" mode="aspectFit" />
         <text class="large-title">GEOPICS</text>
       </view>
-      <view class="capsule {{isMember ? 'capsule-dark' : ''}}" hover-class="tap-dim" bindtap="onOpenPaywall">{{memberChip}}</view>
+      <view wx:if="{{!singlePage}}" class="header-actions">
+        <text class="icon-btn" hover-class="tap-dim" aria-label="帮助与关于" bindtap="onOpenAbout">?</text>
+        <view class="capsule {{isMember ? 'capsule-dark' : ''}}" hover-class="tap-dim" bindtap="onOpenPaywall">{{memberChip}}</view>
+      </view>
     </view>
     <text wx:if="{{!hasPhoto}}" class="header-sub">把照片与它发生的地方，做成一张海报</text>
   </view>
@@ -20,20 +23,18 @@
         bindtap="onTapCategory"
       >{{item.name}}</view>
     </view>
-    <scroll-view scroll-x enable-flex class="chips" scroll-with-animation scroll-into-view="tab-{{templateId}}">
-      <view
-        wx:for="{{visibleTemplates}}"
-        wx:key="id"
-        id="tab-{{item.id}}"
-        class="chip {{item.id === templateId ? 'chip-on' : ''}}"
-        data-id="{{item.id}}"
-        bindtap="onTapTemplate"
-      >{{item.name}}</view>
+    <scroll-view scroll-x enable-flex class="chips bleed" scroll-with-animation scroll-into-view="tab-{{templateId}}">
+      <view class="bleed-pad"></view>
+      <block wx:for="{{visibleTemplates}}" wx:key="id">
+        <view id="tab-{{item.id}}" class="bleed-anchor"></view>
+        <view class="chip {{item.id === templateId ? 'chip-on' : ''}}" data-id="{{item.id}}" bindtap="onTapTemplate">{{item.name}}</view>
+      </block>
+      <view class="bleed-end"></view>
     </scroll-view>
   </view>
 
   <view class="stage">
-    <view class="poster-frame" style="{{canvasStyle}}">
+    <view class="poster-frame" style="{{canvasStyle}}" bindtap="onTapPreview">
       <canvas
         id="posterCanvas"
         type="2d"
@@ -52,12 +53,16 @@
       </view>
     </view>
     <view wx:if="{{hasPhoto && currentLocked}}" class="stage-note">
-      <text>免费版预览带水印</text>
-      <text class="link stage-link" bindtap="onOpenPaywall">解锁无水印高清图</text>
+      <block wx:if="{{canPurchase}}">
+        <text>免费版预览带水印</text>
+        <text class="link stage-link" bindtap="onOpenPaywall">解锁无水印高清图</text>
+      </block>
+      <text wx:else>额度已用完，预览带水印</text>
     </view>
     <text wx:elif="{{hasPhoto && freeLeft > 0}}" class="stage-note">剩余额度 {{freeLeft}} 张，每保存一张消耗 1 张</text>
-    <text wx:if="{{!hasPhoto}}" class="stage-note">选择带定位信息的原图，自动读取拍摄地点与日期</text>
-    <text wx:if="{{tokenMissing}}" class="stage-note stage-warn">未配置 Mapbox Token（utils/config.js），当前使用本地简约底图，地名不可用</text>
+    <text wx:if="{{singlePage}}" class="stage-note">当前为朋友圈预览，点击下方「前往小程序」即可用自己的照片制作</text>
+    <text wx:elif="{{!hasPhoto}}" class="stage-note">选择带定位信息的原图，自动读取拍摄地点与日期</text>
+    <text wx:if="{{tokenMissing}}" class="stage-note stage-warn">开发提示：未配置 Mapbox Token（utils/config.local.js），当前使用本地简约底图，地名不可用</text>
   </view>
 
   <block wx:if="{{hasPhoto}}">
@@ -66,31 +71,29 @@
         <text class="section-title">照片 {{itemCount}}/{{maxBatch}}</text>
         <text wx:if="{{itemCount > 1}}" class="section-action" bindtap="onToggleSelectAll">{{selectedCount === itemCount ? '取消全选' : '全选'}}</text>
       </view>
-      <scroll-view scroll-x enable-flex class="strip" scroll-with-animation scroll-into-view="thumb-{{currentId}}">
-        <view
-          wx:for="{{list}}"
-          wx:key="id"
-          id="thumb-{{item.id}}"
-          class="thumb {{item.current ? 'thumb-current' : ''}}"
-          data-id="{{item.id}}"
-          bindtap="onTapItem"
-        >
-          <image class="thumb-img" src="{{item.path}}" mode="aspectFill" />
-          <view wx:if="{{batchMode === 'random' && itemCount > 1}}" class="thumb-scrim">
-            <text class="thumb-tpl">{{item.tplName}}</text>
+      <scroll-view scroll-x enable-flex class="strip bleed" scroll-with-animation scroll-into-view="thumb-{{currentId}}">
+        <view class="bleed-pad"></view>
+        <block wx:for="{{list}}" wx:key="id">
+          <view id="thumb-{{item.id}}" class="bleed-anchor"></view>
+          <view class="thumb {{item.current ? 'thumb-current' : ''}}" data-id="{{item.id}}" bindtap="onTapItem">
+            <image class="thumb-img" src="{{item.path}}" mode="aspectFill" />
+            <view wx:if="{{batchMode === 'random' && itemCount > 1}}" class="thumb-scrim">
+              <text class="thumb-tpl">{{item.tplName}}</text>
+            </view>
+            <text wx:if="{{item.noLoc}}" class="thumb-badge thumb-badge-warn">无位置</text>
+            <text wx:elif="{{item.locked && lockBadges}}" class="thumb-badge">水印</text>
+            <view wx:if="{{itemCount > 1}}" class="thumb-hit thumb-hit-left" data-id="{{item.id}}" catchtap="onToggleSelect">
+              <view class="check {{item.selected ? 'check-on' : ''}}"></view>
+            </view>
+            <view wx:if="{{item.current}}" class="thumb-hit thumb-hit-right" data-id="{{item.id}}" catchtap="onRemoveItem">
+              <view class="remove"></view>
+            </view>
           </view>
-          <text wx:if="{{item.noLoc}}" class="thumb-badge thumb-badge-warn">无位置</text>
-          <text wx:elif="{{item.locked && lockBadges}}" class="thumb-badge">水印</text>
-          <view wx:if="{{itemCount > 1}}" class="thumb-hit thumb-hit-left" data-id="{{item.id}}" catchtap="onToggleSelect">
-            <view class="check {{item.selected ? 'check-on' : ''}}"></view>
-          </view>
-          <view wx:if="{{item.current}}" class="thumb-hit thumb-hit-right" data-id="{{item.id}}" catchtap="onRemoveItem">
-            <view class="remove"></view>
-          </view>
-        </view>
+        </block>
         <view class="thumb thumb-add" hover-class="tap-dim" bindtap="onTapAddTile">
           <view class="plus"></view>
         </view>
+        <view class="bleed-end"></view>
       </scroll-view>
       <view wx:if="{{itemCount > 1}}" class="strip-tools">
         <view class="seg seg-mode">
@@ -265,11 +268,15 @@
           <text class="cell-label">品牌底栏</text>
           <switch class="cell-switch" checked="{{footerOn}}" color="#34C759" bindchange="onToggleFooter" />
         </view>
+        <view class="cell cell-line">
+          <text class="cell-label">导出尺寸</text>
+          <text class="cell-value">{{exportSize}} px</text>
+        </view>
       </view>
     </view>
   </block>
 
-  <view class="toolbar">
+  <view wx:if="{{!singlePage}}" class="toolbar">
     <view wx:if="{{!hasPhoto}}" class="btn btn-primary {{busy ? 'btn-off' : ''}}" hover-class="tap-dim" bindtap="onChoosePhoto">从相册选择照片</view>
     <block wx:elif="{{itemCount > 1}}">
       <view class="btn btn-secondary {{busy ? 'btn-off' : ''}}" hover-class="tap-dim" bindtap="onSavePoster">{{currentLocked ? '解锁后保存' : '保存当前'}}</view>
@@ -283,7 +290,7 @@
       <view class="grabber"></view>
       <view class="sheet-nav">
         <text class="sheet-side"></text>
-        <text class="sheet-title">解锁无水印高清图</text>
+        <text class="sheet-title">{{canPurchase ? '解锁无水印高清图' : '会员与额度'}}</text>
         <text class="sheet-side sheet-close" bindtap="onPaywallClose">关闭</text>
       </view>
       <scroll-view scroll-y class="sheet-body">
@@ -295,31 +302,44 @@
           <text wx:for="{{packLines}}" wx:key="*this" class="pw-pack">{{item}}</text>
         </view>
 
-        <view class="group">
-          <view
-            wx:for="{{plans}}"
-            wx:key="id"
-            class="cell cell-tall {{index > 0 ? 'cell-line' : ''}}"
-            hover-class="cell-hover"
-            data-kind="plan"
-            data-id="{{item.id}}"
-            bindtap="onBuy"
-          >
-            <view class="cell-main">
-              <text class="cell-title">{{item.name}}</text>
-              <text class="cell-sub">{{item.desc}}</text>
+        <block wx:if="{{canPurchase}}">
+          <view class="group">
+            <view
+              wx:for="{{plans}}"
+              wx:key="id"
+              class="cell cell-tall {{index > 0 ? 'cell-line' : ''}}"
+              hover-class="cell-hover"
+              data-kind="plan"
+              data-id="{{item.id}}"
+              bindtap="onBuy"
+            >
+              <view class="cell-main">
+                <view class="cell-title-row">
+                  <text class="cell-title">{{item.name}}</text>
+                  <text class="plan-tag {{item.best ? 'plan-tag-best' : ''}}">{{item.unitText}}</text>
+                </view>
+                <text class="cell-sub">{{item.desc}}</text>
+              </view>
+              <text class="price">{{item.priceText}}</text>
             </view>
-            <text class="price">{{item.priceText}}</text>
-          </view>
-          <view wx:if="{{hasPhoto}}" class="cell cell-tall cell-line" hover-class="cell-hover" data-kind="single" bindtap="onBuy">
-            <view class="cell-main">
-              <text class="cell-title">{{singleOffer.name}}</text>
-              <text class="cell-sub">{{singleOffer.desc}}</text>
+            <view wx:if="{{hasPhoto}}" class="cell cell-tall cell-line" hover-class="cell-hover" data-kind="single" bindtap="onBuy">
+              <view class="cell-main">
+                <text class="cell-title">{{singleOffer.name}}</text>
+                <text class="cell-sub">{{singleOffer.desc}}</text>
+              </view>
+              <text class="price">{{singleOffer.priceText}}</text>
             </view>
-            <text class="price">{{singleOffer.priceText}}</text>
           </view>
-        </view>
-        <text class="section-foot">解锁后可保存 {{exportSize}} 无水印高清海报，每保存一张消耗 1 个额度，同一张照片再次保存不重复计费。额度用完后，可再次购买月度或年度会员叠加使用。</text>
+          <text class="section-foot">解锁后可保存 {{exportSize}} 无水印高清海报，每保存一张消耗 1 个额度，同一张照片再次保存不重复计费。额度用完后，可再次购买月度或年度会员叠加使用。</text>
+        </block>
+        <block wx:else>
+          <view class="group">
+            <view class="cell cell-tall">
+              <text class="pw-unavailable">由于相关规范，iOS 暂不支持在小程序内购买</text>
+            </view>
+          </view>
+          <text class="section-foot">每保存一张 {{exportSize}} 无水印高清海报消耗 1 个额度，同一张照片再次保存不重复计费。</text>
+        </block>
 
         <view class="group pw-invite">
           <view class="cell">

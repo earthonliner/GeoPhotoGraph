@@ -5,6 +5,7 @@ const themes = require('../../utils/themes');
 const batchUtil = require('../../utils/batch');
 const membership = require('../../utils/membership');
 const payment = require('../../utils/payment');
+const platform = require('../../utils/platform');
 const appConfig = require('../../utils/config');
 const { POSTER_W, POSTER_H, FOOTER_H, MAX_CROP_ZOOM, clamp } = require('../../utils/poster/core.js');
 const {
@@ -27,6 +28,13 @@ const exportSizeText = (footer) => `${POSTER_W * EXPORT_SCALE} × ${Math.round(p
 const TINT = '#007AFF';
 // 使用真实地图时海报上绘制的 Mapbox 标志（署名要求）
 const MAPBOX_LOGO = '/assets/mapbox-logo.png';
+// 回到页面时向服务端同步权益的最短间隔：选图、定位等系统界面返回也会触发 onShow
+const SYNC_INTERVAL = 30 * 1000;
+const SHARE_TITLE = 'GEOPICS · 把照片与它发生的地方，做成一张海报';
+// 转发卡片按 5:4 显示
+const SHARE_W = 750;
+const SHARE_H = 600;
+const SHARE_PAD = 44;
 
 const DEFAULT_CROP = { zoom: 1, x: 0, y: 0 };
 
@@ -42,6 +50,20 @@ function wxp(method, options) {
 
 function isCancel(err) {
   return !!(err && /cancel/i.test(err.errMsg || ''));
+}
+
+// 用户拒绝了隐私保护指引（104），或接口未在指引中声明（112）。
+// 须先于相册权限判断：拒绝隐私授权的 errMsg 同样包含 “auth”
+function isPrivacyDenied(err) {
+  return !!err && (err.errno === 104 || err.errno === 112 || /privacy/i.test(err.errMsg || ''));
+}
+
+function tick() {
+  if (wx.vibrateShort) wx.vibrateShort({ type: 'light', fail() {} });
+}
+
+function keepScreenOn(on) {
+  if (wx.setKeepScreenOn) wx.setKeepScreenOn({ keepScreenOn: on, fail() {} });
 }
 
 function loadImage(canvas, src) {
@@ -90,6 +112,20 @@ function templateTabs(categoryId) {
   return templatesOf(categoryId).map((t) => ({ id: t.id, name: t.name }));
 }
 
+// 会员档位附上单张均价，并标出均价最低的一档
+function planOffers() {
+  const plans = appConfig.membership.plans;
+  const unit = (pl) => pl.price / pl.quota;
+  const best = Math.min(...plans.map(unit));
+  return plans.map((pl) =>
+    Object.assign({}, pl, {
+      priceText: membership.formatPrice(pl.price),
+      unitText: `约 ¥${(unit(pl) / 100).toFixed(2)}/张`,
+      best: plans.length > 1 && unit(pl) === best
+    })
+  );
+}
+
 Page({
   data: {
     footerOn: true,
@@ -103,13 +139,15 @@ Page({
     currentLocked: true,
     lockBadges: false,
     paywallVisible: false,
-    plans: appConfig.membership.plans.map((pl) => Object.assign({ priceText: membership.formatPrice(pl.price) }, pl)),
+    plans: planOffers(),
     singleOffer: Object.assign({ priceText: membership.formatPrice(appConfig.membership.single.price) }, appConfig.membership.single),
     inviteInput: '',
     inviteError: '',
     paywallNotice: '',
     packLines: [],
     mockPay: payment.isMock(),
+    canPurchase: true,
+    singlePage: false,
     categories: CATEGORIES,
     catId: HOT_CATEGORY,
     visibleTemplates: templateTabs(HOT_CATEGORY),
@@ -155,10 +193,12 @@ Page({
     canvasStyle: '',
     busy: false,
     busyText: '',
-    tokenMissing: !mapService.hasToken()
+    tokenMissing: false
   },
 
   onLoad() {
+    this.canPurchase = platform.canPurchase();
+    this.singlePage = platform.isSinglePageMode();
     // 非 data 状态：与渲染无关，避免多余的 setData
     this.items = [];
     this.member = membership.load();
@@ -189,7 +229,15 @@ Page({
     this.dpr = Math.min(win.pixelRatio || 2, 3);
     this.setData(
       Object.assign(
-        { footerOn, exportSize: exportSizeText(footerOn), canvasStyle: `width:${cssW}px;height:${cssH}px;` },
+        {
+          footerOn,
+          exportSize: exportSizeText(footerOn),
+          canvasStyle: `width:${cssW}px;height:${cssH}px;`,
+          canPurchase: this.canPurchase,
+          singlePage: this.singlePage,
+          // 只提示开发者：正式版缺少 token 时静默使用本地底图
+          tokenMissing: !mapService.hasToken() && platform.isDevBuild()
+        },
         this.pickerView(),
         this.memberView(),
         this.listView()
@@ -203,7 +251,11 @@ Page({
   },
 
   onShow() {
-    this.syncMember();
+    return this.syncMember();
+  },
+
+  onOpenAbout() {
+    wx.navigateTo({ url: '/pages/about/about' });
   },
 
   onUnload() {
@@ -344,12 +396,16 @@ Page({
   },
 
   memberView() {
+    const now = Date.now();
     return {
-      isMember: membership.remainingQuota(this.member) > 0,
-      freeLeft: membership.remainingQuota(this.member) > 0 ? 0 : membership.freeRemaining(this.member) + membership.singlesRemaining(this.member),
-      memberLabel: membership.label(this.member),
-      memberChip: membership.chipLabel(this.member),
-      packLines: membership.packLines(this.member, appConfig.membership.plans)
+      isMember: membership.remainingQuota(this.member, now) > 0,
+      freeLeft:
+        membership.remainingQuota(this.member, now) > 0
+          ? 0
+          : membership.freeRemaining(this.member) + membership.singlesRemaining(this.member),
+      memberLabel: membership.label(this.member, now, this.canPurchase),
+      memberChip: membership.chipLabel(this.member, now, this.canPurchase),
+      packLines: membership.packLines(this.member, appConfig.membership.plans, now)
     };
   },
 
@@ -392,9 +448,11 @@ Page({
     membership.save(this.member);
   },
 
-  // cloud 模式下权益以服务端为准：每次回到页面时拉取，并顺带让服务端补偿入账未收到回调的订单
-  async syncMember() {
-    if (payment.isMock() || this._syncing) return;
+  // cloud 模式下权益以服务端为准：回到页面时拉取（间隔 SYNC_INTERVAL，force 时立即），
+  // 并顺带让服务端补偿入账未收到回调的订单。朋友圈单页模式不能调用云开发，跳过
+  async syncMember(force) {
+    if (payment.isMock() || this.singlePage || this._syncing) return;
+    if (!force && Date.now() - (this._syncedAt || 0) < SYNC_INTERVAL) return;
     this._syncing = true;
     try {
       this.adoptMember(await payment.fetchEntitlement());
@@ -407,6 +465,7 @@ Page({
   // 采用服务端返回的权益快照（本地缓存仅用于下次启动时先显示）。silent 时不重绘，由调用方稍后统一刷新
   adoptMember(state, silent) {
     this.member = membership.normalize(state);
+    this._syncedAt = Date.now();
     membership.save(this.member);
     if (!silent && this.poster) this.refreshEntitlement();
   },
@@ -499,7 +558,7 @@ Page({
   },
 
   async onBuy(e) {
-    if (this.data.busy) return;
+    if (this.data.busy || !this.canPurchase) return;
     const { kind, id } = e.currentTarget.dataset;
     let order;
     let plan = null;
@@ -523,10 +582,11 @@ Page({
     }
     if (!result || !result.ok) return;
     if (result.pending) {
-      // 已付款但服务端尚未确认：不在本地发放权益，稍后自动同步
+      // 已付款但服务端尚未确认：不在本地发放权益，稍后自动同步；在此之前回到页面也会立即同步
       wx.showToast({ title: '支付结果确认中，稍后自动到账', icon: 'none' });
+      this._syncedAt = 0;
       clearTimeout(this._syncTimer);
-      this._syncTimer = setTimeout(() => this.syncMember(), 8000);
+      this._syncTimer = setTimeout(() => this.syncMember(true), 8000);
       return;
     }
     if (result.state) {
@@ -588,6 +648,12 @@ Page({
     return this.chooseAndImport(true);
   },
 
+  // 空白预览上画着“添加照片”，点按即可选图；有照片时预览只响应取景手势
+  onTapPreview() {
+    if (this.data.hasPhoto || this.data.busy) return;
+    return this.onChoosePhoto();
+  },
+
   // 缩略图条末尾的 “+”：继续添加，或重新选择替换全部
   async onTapAddTile() {
     if (this.data.busy) return;
@@ -604,6 +670,10 @@ Page({
   },
 
   async chooseAndImport(append) {
+    if (this.singlePage) {
+      wx.showToast({ title: '请点击下方「前往小程序」后使用', icon: 'none' });
+      return;
+    }
     const remain = MAX_BATCH - (append ? this.items.length : 0);
     if (remain <= 0) {
       wx.showToast({ title: `最多 ${MAX_BATCH} 张`, icon: 'none' });
@@ -620,14 +690,21 @@ Page({
       });
       files = res.tempFiles.map((f) => f.tempFilePath);
     } catch (e) {
-      if (!isCancel(e)) wx.showToast({ title: '选择图片失败', icon: 'none' });
+      if (isCancel(e)) return;
+      console.error('choose media failed', e);
+      wx.showToast({ title: isPrivacyDenied(e) ? '需同意隐私保护指引后才能选择照片' : '选择照片失败，请重试', icon: 'none' });
       return;
     }
+    if (!files.length) return;
 
-    this.showBusy('读取并处理照片…');
+    const total = files.length;
+    const progress = (i) => (total > 1 ? `读取照片 ${i + 1}/${total}…` : '读取并处理照片…');
+    this.showBusy(progress(0));
     const baseTemplate = this.poster.templateId;
     const created = [];
-    for (const filePath of files) {
+    for (let i = 0; i < total; i += 1) {
+      const filePath = files[i];
+      if (i > 0) this.setData({ busyText: progress(i) });
       const item = this.createItem(filePath, baseTemplate);
       const exif = await exifParser.extractFromFile(filePath);
       item.autoDate = {
@@ -653,6 +730,7 @@ Page({
     this.syncView();
     this.render();
 
+    if (mapService.hasToken() && created.some((it) => it.exif.hasGps)) this.setData({ busyText: '获取地名…' });
     await Promise.all(
       created.map((item) => {
         const exif = item.exif;
@@ -670,7 +748,7 @@ Page({
     if (created.length === 1) {
       const modal = await wxp('showModal', {
         title: '未读取到位置',
-        content: '未读取到位置，请在地图上手动选择',
+        content: '这张照片没有定位信息（拍摄时未开启定位，或经聊天转发后被移除），可以手动选择拍摄地点。',
         confirmText: '去选择',
         cancelText: '暂不',
         confirmColor: TINT
@@ -831,7 +909,9 @@ Page({
     try {
       loc = await wxp('chooseLocation', {});
     } catch (e) {
-      if (!isCancel(e)) wx.showToast({ title: '无法打开地图选点', icon: 'none' });
+      if (isCancel(e)) return;
+      console.error('choose location failed', e);
+      wx.showToast({ title: isPrivacyDenied(e) ? '需同意隐私保护指引后才能地图选点' : '无法打开地图选点', icon: 'none' });
       return;
     }
     if (!loc || typeof loc.latitude !== 'number') return;
@@ -987,6 +1067,7 @@ Page({
   onTapTemplate(e) {
     const id = e.currentTarget.dataset.id;
     if (id === this.poster.templateId) return;
+    tick();
     // 统一模板模式下作用于全部照片；随机模式下只改当前这张
     if (this.data.batchMode === 'unique') {
       this.applyTemplateToAll(id);
@@ -1428,6 +1509,82 @@ Page({
     paintPoster(canvas, tplId, assets, this.buildInfo(item), style);
   },
 
+  /* ---------------------------- 转发 ---------------------------- */
+
+  shareTitle() {
+    const place = this.data.hasPhoto ? (this.poster.place || '').trim() : '';
+    if (!place || place === 'UNKNOWN' || place === 'LOCATING…') return SHARE_TITLE;
+    return `「${place}」· 用 GEOPICS 做的地图海报`;
+  },
+
+  // 转发卡片按 5:4 显示，直接用 3:4 的预览会被裁掉上下：把整张预览居中放到 5:4 的底图上。
+  // 3 秒内没生成完时，微信使用不带 imageUrl 的默认内容
+  onShareAppMessage() {
+    const share = { title: this.shareTitle(), path: '/pages/index/index' };
+    const promise = this.composeShareImage()
+      .catch((e) => {
+        console.warn('compose share image failed', e);
+        return '';
+      })
+      .then((imageUrl) => (imageUrl ? Object.assign({ imageUrl }, share) : share));
+    return Object.assign({ promise }, share);
+  },
+
+  // 朋友圈只能同步返回，使用默认的小程序图标
+  onShareTimeline() {
+    return { title: this.shareTitle() };
+  },
+
+  async composeShareImage() {
+    // 导出时离屏画布正在使用
+    if (!this.preview || this.data.busy) return '';
+    let snapshot = this.data.coverImage;
+    if (!snapshot) {
+      const { width, height } = this.preview;
+      ({ tempFilePath: snapshot } = await wxp('canvasToTempFilePath', {
+        canvas: this.preview,
+        x: 0,
+        y: 0,
+        width,
+        height,
+        destWidth: width,
+        destHeight: height,
+        fileType: 'jpg',
+        quality: 0.92
+      }));
+    }
+    const canvas = await this.queryCanvas('#exportCanvas');
+    canvas.width = SHARE_W;
+    canvas.height = SHARE_H;
+    const ctx = canvas.getContext('2d');
+    const img = await loadImage(canvas, snapshot);
+    ctx.fillStyle = '#F2F2F7';
+    ctx.fillRect(0, 0, SHARE_W, SHARE_H);
+    const h = SHARE_H - SHARE_PAD * 2;
+    const w = Math.round((h * img.width) / img.height);
+    const x = Math.round((SHARE_W - w) / 2);
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.16)';
+    ctx.shadowBlur = 32;
+    ctx.shadowOffsetY = 10;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(x, SHARE_PAD, w, h);
+    ctx.restore();
+    ctx.drawImage(img, x, SHARE_PAD, w, h);
+    const { tempFilePath } = await wxp('canvasToTempFilePath', {
+      canvas,
+      x: 0,
+      y: 0,
+      width: SHARE_W,
+      height: SHARE_H,
+      destWidth: SHARE_W,
+      destHeight: SHARE_H,
+      fileType: 'jpg',
+      quality: 0.9
+    });
+    return tempFilePath;
+  },
+
   /* ---------------------------- 导出 ---------------------------- */
 
   // 渲染一张照片并导出为临时文件（1200 x 1600）
@@ -1463,27 +1620,28 @@ Page({
     if (this.data.busy || !items.length) return;
     const { allowed, blocked } = this.splitByEntitlement(items);
     const bought = this.member.bought;
+    const buy = this.canPurchase;
     const freeTotal = appConfig.membership.freeQuota;
-    const exhausted = bought
-      ? '额度已用完或已到期，购买额外的月度或年度会员即可继续下载。'
-      : `${freeTotal} 张免费额度已用完，开通会员即可继续下载。`;
+    const upsell = !buy ? '' : bought ? '购买额外的月度或年度会员即可继续下载。' : '开通会员即可继续下载。';
+    const exhausted = (bought ? '额度已用完或已到期。' : `${freeTotal} 张免费额度已用完。`) + upsell;
     if (!allowed.length) {
       await this.openPaywall(resume, exhausted);
       return;
     }
     if (blocked.length) {
-      const notice = bought
-        ? `本次需下载 ${items.length} 张，剩余额度只够 ${allowed.length} 张。购买额外的月度或年度会员可继续下载其余 ${blocked.length} 张。`
-        : `免费额度只够 ${allowed.length} 张，其余 ${blocked.length} 张带水印，无法下载。开通会员可继续下载。`;
+      let notice = bought
+        ? `本次需下载 ${items.length} 张，剩余额度只够 ${allowed.length} 张。`
+        : `免费额度只够 ${allowed.length} 张，其余 ${blocked.length} 张带水印，无法下载。`;
+      if (buy) notice += bought ? `购买额外的月度或年度会员可继续下载其余 ${blocked.length} 张。` : '开通会员可继续下载。';
       const res = await wxp('showModal', {
         title: bought ? '会员额度不足' : '部分照片未解锁',
         content: `${notice}\n是否仅下载可下载的 ${allowed.length} 张？`,
         confirmText: `仅下载 ${allowed.length} 张`,
-        cancelText: bought ? '购买额外会员' : '去解锁',
+        cancelText: buy ? (bought ? '购买额外会员' : '去解锁') : '取消',
         confirmColor: TINT
       }).catch(() => ({ confirm: false }));
       if (!res.confirm) {
-        await this.openPaywall(resume, notice);
+        if (buy) await this.openPaywall(resume, notice);
         return;
       }
     }
@@ -1520,52 +1678,79 @@ Page({
     return this.data.selectedCount === this.items.length ? this.onSaveAll() : this.onSaveSelected();
   },
 
-  // 逐张导出并保存到相册；相册权限被拒绝时立即终止，其余失败计入统计
+  // 逐张导出并保存到相册。额度不足、扣额度时网络异常、未同意隐私指引、相册权限被拒绝时立即终止，
+  // 其余失败计入统计
   async saveItems(items) {
     if (this.data.busy || !items.length) return;
     const total = items.length;
     let ok = 0;
     let fail = 0;
-    let denied = false;
-    let short = false;
+    let stop = '';
     const upfront = !payment.isMock();
-    this.showBusy(total > 1 ? `导出 1/${total}…` : '生成高清海报…');
+    const progress = (i) => (total > 1 ? `导出 ${i + 1}/${total}…` : '生成高清海报…');
+    this.showBusy(progress(0));
+    if (total > 1) keepScreenOn(true);
 
-    for (let i = 0; i < total; i += 1) {
-      if (total > 1) this.setData({ busyText: `导出 ${i + 1}/${total}…` });
+    for (let i = 0; i < total && !stop; i += 1) {
+      if (i > 0) this.setData({ busyText: progress(i) });
+      if (upfront) {
+        try {
+          await this.chargeItem(items[i]);
+        } catch (e) {
+          if (!(e && e.code === 'insufficient')) console.error('charge failed', e);
+          stop = e && e.code === 'insufficient' ? 'short' : 'offline';
+          break;
+        }
+      }
       try {
-        if (upfront) await this.chargeItem(items[i]);
         const filePath = await this.exportItem(items[i]);
         await wxp('saveImageToPhotosAlbum', { filePath });
         ok += 1;
         if (!upfront) await this.chargeItem(items[i]);
       } catch (e) {
-        if (e && e.code === 'insufficient') {
-          short = true;
-          break;
+        if (isCancel(e)) stop = 'cancel';
+        else if (isPrivacyDenied(e)) stop = 'privacy';
+        else if (/auth/i.test((e && e.errMsg) || '')) stop = 'denied';
+        else {
+          console.error('export failed', e);
+          fail += 1;
         }
-        if (isCancel(e)) {
-          break;
-        }
-        if (/auth/i.test(e.errMsg || '')) {
-          denied = true;
-          break;
-        }
-        console.error('export failed', e);
-        fail += 1;
       }
     }
+    if (total > 1) keepScreenOn(false);
     this.hideBusy();
+    const short = stop === 'short';
     if (ok || short) this.refreshEntitlement();
     if (short) {
       // 服务端认定额度不足（本地快照过期或被篡改）：购买 / 兑换成功后继续下载没保存的照片
       const rest = items.filter((it) => !it.unlocked);
       const resume = () => this.requestSave(rest, resume);
-      await this.openPaywall(resume, ok ? `已保存 ${ok} 张，剩余额度不足，购买会员后可继续下载其余照片。` : '额度不足，购买会员后即可继续下载。');
+      const saved = ok ? `已保存 ${ok} 张，剩余额度不足` : '额度不足';
+      const upsell = !this.canPurchase ? '。' : ok ? '，购买会员后可继续下载其余照片。' : '，购买会员后即可继续下载。';
+      await this.openPaywall(resume, saved + upsell);
       return;
     }
 
-    if (denied) {
+    const saved = ok ? `已保存 ${ok} 张。` : '';
+    if (stop === 'offline') {
+      wxp('showModal', {
+        title: '网络异常',
+        content: `${saved}暂时无法连接服务器校验额度，${ok ? '其余照片未保存，' : ''}请检查网络后重试。`,
+        showCancel: false,
+        confirmColor: TINT
+      }).catch(() => {});
+      return;
+    }
+    if (stop === 'privacy') {
+      wxp('showModal', {
+        title: '无法保存到相册',
+        content: `${saved}需同意《隐私保护指引》后才能保存到相册，请重试并在弹窗中选择同意。`,
+        showCancel: false,
+        confirmColor: TINT
+      }).catch(() => {});
+      return;
+    }
+    if (stop === 'denied') {
       const res = await wxp('showModal', {
         title: '需要相册权限',
         content: ok ? `已保存 ${ok} 张，请在设置中允许保存到相册后继续` : '请在设置中允许保存到相册后重试',
