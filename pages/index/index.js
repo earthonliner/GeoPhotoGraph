@@ -1557,6 +1557,7 @@ Page({
     // 非 data 状态：与渲染无关，避免多余的 setData
     this.items = [];
     this.member = membership.load();
+    this._sessionId = Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
     this._afterUnlock = null;
     this._itemSeq = 0;
     this.poster = this.createItem('');
@@ -1596,8 +1597,13 @@ Page({
     this.observeLargeTitle();
   },
 
+  onShow() {
+    this.syncMember();
+  },
+
   onUnload() {
     if (this._titleObserver) this._titleObserver.disconnect();
+    clearTimeout(this._syncTimer);
   },
 
   // 仿 iOS 大标题：页面内的大标题滚出视野后，才在导航栏显示标题
@@ -1735,7 +1741,7 @@ Page({
   memberView() {
     return {
       isMember: membership.remainingQuota(this.member) > 0,
-      freeLeft: membership.remainingQuota(this.member) > 0 ? 0 : membership.freeRemaining(this.member),
+      freeLeft: membership.remainingQuota(this.member) > 0 ? 0 : membership.freeRemaining(this.member) + membership.singlesRemaining(this.member),
       memberLabel: membership.label(this.member),
       memberChip: membership.chipLabel(this.member),
       packLines: membership.packLines(this.member, appConfig.membership.plans)
@@ -1760,13 +1766,44 @@ Page({
     return { allowed, blocked };
   },
 
-  // 保存成功后扣减额度；该照片本次会话内再次保存不重复计费
-  chargeItem(item) {
+  // 扣减额度；该照片本次会话内再次保存不重复计费。
+  // cloud 模式在导出前向服务端扣（额度不足会抛出 code 为 insufficient 的错误），本地模式在保存成功后扣
+  async chargeItem(item) {
     if (item.unlocked) return;
+    if (!payment.isMock()) {
+      const r = await payment.charge(`${this._sessionId}:${item.id}`);
+      this.adoptMember(r.state, true);
+      if (!r.ok) {
+        const err = new Error('insufficient quota');
+        err.code = 'insufficient';
+        throw err;
+      }
+      item.unlocked = true;
+      return;
+    }
     item.unlocked = true;
     if (this.member.invite) return;
     this.member = membership.consume(this.member, 1);
     membership.save(this.member);
+  },
+
+  // cloud 模式下权益以服务端为准：每次回到页面时拉取，并顺带让服务端补偿入账未收到回调的订单
+  async syncMember() {
+    if (payment.isMock() || this._syncing) return;
+    this._syncing = true;
+    try {
+      this.adoptMember(await payment.fetchEntitlement());
+    } catch (e) {
+      console.error('sync entitlement failed', e);
+    }
+    this._syncing = false;
+  },
+
+  // 采用服务端返回的权益快照（本地缓存仅用于下次启动时先显示）。silent 时不重绘，由调用方稍后统一刷新
+  adoptMember(state, silent) {
+    this.member = membership.normalize(state);
+    membership.save(this.member);
+    if (!silent && this.poster) this.refreshEntitlement();
   },
 
   // 权益变化后刷新标题栏 / 缩略图 / 预览水印
@@ -1839,18 +1876,19 @@ Page({
       this.setData({ inviteError: '请输入邀请码' });
       return;
     }
-    let valid = false;
+    let res;
     try {
-      valid = await payment.verifyInvite(code);
+      res = await payment.redeemInvite(code);
     } catch (e) {
       this.setData({ inviteError: '校验失败，请稍后重试' });
       return;
     }
-    if (!valid) {
-      this.setData({ inviteError: '邀请码无效' });
+    if (!res.valid) {
+      this.setData({ inviteError: res.tooMany ? '尝试次数过多，请稍后再试' : '邀请码无效' });
       return;
     }
-    this.member = Object.assign({}, this.member, { invite: true });
+    if (res.state) this.adoptMember(res.state, true);
+    else this.member = Object.assign({}, this.member, { invite: true });
     membership.save(this.member);
     this.finishUnlock('邀请码已生效');
   },
@@ -1879,7 +1917,16 @@ Page({
       return;
     }
     if (!result || !result.ok) return;
-    if (plan) {
+    if (result.pending) {
+      // 已付款但服务端尚未确认：不在本地发放权益，稍后自动同步
+      wx.showToast({ title: '支付结果确认中，稍后自动到账', icon: 'none' });
+      clearTimeout(this._syncTimer);
+      this._syncTimer = setTimeout(() => this.syncMember(), 8000);
+      return;
+    }
+    if (result.state) {
+      this.adoptMember(result.state, true);
+    } else if (plan) {
       this.member = membership.addPack(this.member, plan);
       membership.save(this.member);
     } else {
@@ -2864,16 +2911,23 @@ Page({
     let ok = 0;
     let fail = 0;
     let denied = false;
+    let short = false;
+    const upfront = !payment.isMock();
     this.showBusy(total > 1 ? `导出 1/${total}…` : '生成高清海报…');
 
     for (let i = 0; i < total; i += 1) {
       if (total > 1) this.setData({ busyText: `导出 ${i + 1}/${total}…` });
       try {
+        if (upfront) await this.chargeItem(items[i]);
         const filePath = await this.exportItem(items[i]);
         await wxp('saveImageToPhotosAlbum', { filePath });
         ok += 1;
-        this.chargeItem(items[i]);
+        if (!upfront) await this.chargeItem(items[i]);
       } catch (e) {
+        if (e && e.code === 'insufficient') {
+          short = true;
+          break;
+        }
         if (isCancel(e)) {
           break;
         }
@@ -2886,7 +2940,14 @@ Page({
       }
     }
     this.hideBusy();
-    if (ok) this.refreshEntitlement();
+    if (ok || short) this.refreshEntitlement();
+    if (short) {
+      // 服务端认定额度不足（本地快照过期或被篡改）：购买 / 兑换成功后继续下载没保存的照片
+      const rest = items.filter((it) => !it.unlocked);
+      const resume = () => this.requestSave(rest, resume);
+      await this.openPaywall(resume, ok ? `已保存 ${ok} 张，剩余额度不足，购买会员后可继续下载其余照片。` : '额度不足，购买会员后即可继续下载。');
+      return;
+    }
 
     if (denied) {
       const res = await wxp('showModal', {

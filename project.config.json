@@ -1,6 +1,7 @@
 {
   "description": "GeoPics - EXIF + map poster mini program",
   "miniprogramRoot": "./",
+  "cloudfunctionRoot": "cloudfunctions/",
   "compileType": "miniprogram",
   "libVersion": "3.4.0",
   "appid": "wx785d5f0774e9e9ad",
@@ -32,7 +33,10 @@
   "condition": {},
   "simulatorPluginLibVersion": {},
   "packOptions": {
-    "ignore": [],
+    "ignore": [
+      { "type": "folder", "value": "cloudfunctions" },
+      { "type": "folder", "value": "tests" }
+    ],
     "include": []
   },
   "editorSetting": {}

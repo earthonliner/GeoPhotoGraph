@@ -1,0 +1,9 @@
+{
+  "name": "geopics-api",
+  "version": "1.0.0",
+  "description": "GeoPics cloud function: WeChat Pay orders, entitlements, quota charging, invite codes",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "~3.0.1"
+  }
+}
