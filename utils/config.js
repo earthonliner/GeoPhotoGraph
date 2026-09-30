@@ -8,9 +8,10 @@
  * token 为空时：不会请求地图与逆地理编码，海报使用本地绘制的极简底图，
  * 地名显示为经纬度占位，便于本地无网络调试。
  */
+mapbox_token = ''
 module.exports = {
   mapbox: {
-    token: '',
+    token: mapbox_token,
     // 推荐在 Mapbox Studio 中 Duplicate「Monochrome / Light」得到自己的黑白极简样式
     username: 'mapbox',
     styleId: 'light-v11',
