@@ -1,3 +1,6 @@
+// 一次最多处理的照片张数
+const MAX_BATCH = 9;
+
 /**
  * 批量随机模板：把模板 id 洗牌后依次发放，一轮用完再洗下一轮，
  * 保证 n 张照片在模板数量充足时不会出现重复，且相邻两轮衔接处也尽量不重复。
@@ -26,4 +29,4 @@ function pickRandomTemplates(ids, count, randomFn) {
   return result;
 }
 
-module.exports = { pickRandomTemplates, shuffle };
+module.exports = { MAX_BATCH, pickRandomTemplates, shuffle };

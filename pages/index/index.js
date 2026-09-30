@@ -2,107 +2,41 @@ const exifParser = require('../../utils/exif-parser');
 const mapService = require('../../utils/map-service');
 const placeName = require('../../utils/place-name');
 const themes = require('../../utils/themes');
-
-const { hexToRgba } = themes;
 const batchUtil = require('../../utils/batch');
 const membership = require('../../utils/membership');
 const payment = require('../../utils/payment');
+const platform = require('../../utils/platform');
 const appConfig = require('../../utils/config');
+const { POSTER_W, POSTER_H, FOOTER_H, MAX_CROP_ZOOM, clamp } = require('../../utils/poster/core.js');
+const {
+  TEMPLATES,
+  HOT_CATEGORY,
+  CATEGORIES,
+  templatesOf,
+  CROP_REGIONS,
+  paintPoster
+} = require('../../utils/poster/registry.js');
 
-/* ------------------------------------------------------------------ */
-/* 常量与模板配置                                                       */
-/* ------------------------------------------------------------------ */
-
-// 海报逻辑尺寸 400 x 533.33（3:4）。所有绘制坐标基于逻辑单位，
-// 预览按屏幕 dpr 缩放，导出按 3 倍缩放 => 1200 x 1600 px。
-const POSTER_W = 400;
-const POSTER_H = (POSTER_W * 4) / 3;
+// 预览按屏幕 dpr 缩放，导出按 3 倍缩放 => 1200 x 1600 px
 const EXPORT_SCALE = 3;
-// 底端品牌栏（可选）拼接在海报下方，整张图高度 = POSTER_H + FOOTER_H
-const FOOTER_H = 64;
-const MAX_CROP_ZOOM = 4;
-const MAX_BATCH = 9;
+const { MAX_BATCH } = batchUtil;
 const FOOTER_KEY = 'geopics.footer';
 
 const posterHeight = (footer) => POSTER_H + (footer ? FOOTER_H : 0);
 const exportSizeText = (footer) => `${POSTER_W * EXPORT_SCALE} × ${Math.round(posterHeight(footer) * EXPORT_SCALE)}`;
 // 界面强调色（iOS 系统蓝），用于系统弹窗按钮
 const TINT = '#007AFF';
+// 使用真实地图时海报上绘制的 Mapbox 标志（署名要求）
+const MAPBOX_LOGO = '/assets/mapbox-logo.png';
+// 回到页面时向服务端同步权益的最短间隔：选图、定位等系统界面返回也会触发 onShow
+const SYNC_INTERVAL = 30 * 1000;
+const SHARE_TITLE = 'GEOPICS · 把照片与它发生的地方，做成一张海报';
+// 转发卡片按 5:4 显示
+const SHARE_W = 750;
+const SHARE_H = 600;
+const SHARE_PAD = 44;
 
-// 各模板中照片的取景区域（逻辑单位）；胶片 / 明信片的照片框固定，其余为整版或下半版
-const FILM_PHOTO = { left: 68, top: 50, w: 264, h: 368 };
-const POSTCARD_PHOTO = { left: 40, top: 46, w: 320, h: 236 };
-const FULL_PHOTO = { left: 0, top: 0, w: POSTER_W, h: POSTER_H };
-const MAT_PHOTO = { left: 28, top: 28, w: 344, h: 404 };
-const BAR_H = 100;
-const BAR_PHOTO = { left: 0, top: 0, w: POSTER_W, h: POSTER_H - BAR_H };
-const RAIL_W = 64;
-const RAIL_PHOTO = { left: 0, top: 0, w: POSTER_W - RAIL_W, h: POSTER_H };
-const CINEMA_PHOTO = { left: 0, top: 116, w: POSTER_W, h: 260 };
-
-// 支持取景调整（拖动 / 缩放）的模板；拍立得与画廊展签完整显示照片，不需要裁切
-const CROP_REGIONS = {
-  split: { left: 0, top: POSTER_H * 0.4, w: POSTER_W, h: POSTER_H * 0.6 },
-  medallion: FULL_PHOTO,
-  magazine: FULL_PHOTO,
-  film: FILM_PHOTO,
-  postcard: POSTCARD_PHOTO,
-  glass: FULL_PHOTO,
-  typo: FULL_PHOTO,
-  mat: MAT_PHOTO,
-  bar: BAR_PHOTO,
-  frame: FULL_PHOTO,
-  rail: RAIL_PHOTO,
-  cinema: CINEMA_PHOTO,
-  coord: FULL_PHOTO
-};
 const DEFAULT_CROP = { zoom: 1, x: 0, y: 0 };
-
-const SANS = '"Helvetica Neue", Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif';
-const SERIF = 'Georgia, "Times New Roman", "Songti SC", serif';
-const TAGLINE = 'CAPTURED MOMENT · LASTING PLACE';
-
-/**
- * 所有模板都请求整张海报比例（3:4）的地图，作为最底层背景，
- * 这样照片降低不透明度时可以与地图自然融合。
- * pin: 定位针在海报中的比例位置，用于避开被照片遮挡的区域（徽章模板中即圆心）
- */
-const MAP_SIZE = { width: 600, height: 800 };
-const CENTER_PIN = { x: 0.5, y: 0.5 };
-const tplMap = (pin) => Object.assign({ pin }, MAP_SIZE);
-
-// category：模板所属分类；hot：同时出现在“热门”分类里
-const TEMPLATES = [
-  { id: 'polaroid', name: '拍立得', category: 'classic', hot: true, map: tplMap({ x: 0.88, y: 0.5 }) },
-  { id: 'split', name: '上下分割', category: 'classic', map: tplMap({ x: 0.5, y: 0.19 }) },
-  { id: 'medallion', name: '地图徽章', category: 'classic', map: tplMap({ x: 0.18, y: 0.846 }) },
-  { id: 'mat', name: '极简白卡', category: 'minimal', hot: true, map: tplMap(CENTER_PIN) },
-  { id: 'bar', name: '底栏', category: 'minimal', hot: true, map: tplMap(CENTER_PIN) },
-  { id: 'frame', name: '细框', category: 'minimal', hot: true, map: tplMap(CENTER_PIN) },
-  { id: 'rail', name: '侧栏', category: 'minimal', map: tplMap(CENTER_PIN) },
-  { id: 'cinema', name: '影幕', category: 'minimal', map: tplMap(CENTER_PIN) },
-  { id: 'coord', name: '坐标', category: 'minimal', map: tplMap(CENTER_PIN) },
-  { id: 'magazine', name: '杂志封面', category: 'editorial', hot: true, map: tplMap(CENTER_PIN) },
-  { id: 'glass', name: '玻璃卡片', category: 'editorial', hot: true, map: tplMap(CENTER_PIN) },
-  { id: 'typo', name: '巨字', category: 'editorial', map: tplMap(CENTER_PIN) },
-  { id: 'film', name: '胶片', category: 'retro', map: tplMap(CENTER_PIN) },
-  { id: 'postcard', name: '明信片', category: 'retro', map: tplMap(CENTER_PIN) },
-  { id: 'gallery', name: '画廊展签', category: 'retro', map: tplMap({ x: 0.9, y: 0.28 }) }
-];
-
-const HOT_CATEGORY = 'hot';
-const CATEGORIES = [
-  { id: HOT_CATEGORY, name: '热门' },
-  { id: 'minimal', name: '简约' },
-  { id: 'classic', name: '经典' },
-  { id: 'editorial', name: '杂志' },
-  { id: 'retro', name: '复古' }
-];
-
-function templatesOf(categoryId) {
-  return TEMPLATES.filter((t) => (categoryId === HOT_CATEGORY ? t.hot : t.category === categoryId));
-}
-
 
 /* ------------------------------------------------------------------ */
 /* 通用工具                                                             */
@@ -116,6 +50,20 @@ function wxp(method, options) {
 
 function isCancel(err) {
   return !!(err && /cancel/i.test(err.errMsg || ''));
+}
+
+// 用户拒绝了隐私保护指引（104），或接口未在指引中声明（112）。
+// 须先于相册权限判断：拒绝隐私授权的 errMsg 同样包含 “auth”
+function isPrivacyDenied(err) {
+  return !!err && (err.errno === 104 || err.errno === 112 || /privacy/i.test(err.errMsg || ''));
+}
+
+function tick() {
+  if (wx.vibrateShort) wx.vibrateShort({ type: 'light', fail() {} });
+}
+
+function keepScreenOn(on) {
+  if (wx.setKeepScreenOn) wx.setKeepScreenOn({ keepScreenOn: on, fail() {} });
 }
 
 function loadImage(canvas, src) {
@@ -134,1332 +82,6 @@ function cachedImage(canvas, cache, src) {
     if (cache) cache.set(src, img);
     return img;
   });
-}
-
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return function rand() {
-    a += 0x6d2b79f5;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/* ------------------------------------------------------------------ */
-/* Canvas 绘图基础函数（坐标均为逻辑单位）                                 */
-/* ------------------------------------------------------------------ */
-
-function setFont(ctx, size, weight, family, style) {
-  ctx.font = `${style || 'normal'} ${weight || 400} ${size}px ${family || SANS}`;
-}
-
-function measureSpaced(ctx, text, spacing) {
-  let w = 0;
-  for (const ch of text) w += ctx.measureText(ch).width + spacing;
-  return Math.max(0, w - spacing);
-}
-
-// 当前海报的文字不透明度（paintPoster 内同步设置）
-let textAlpha = 1;
-
-// 小程序 Canvas 2D 不保证支持 letterSpacing，这里逐字绘制实现字距
-function drawSpacedText(ctx, text, x, y, spacing, align, mode) {
-  const prevAlpha = ctx.globalAlpha;
-  ctx.globalAlpha = prevAlpha * textAlpha;
-  ctx.textAlign = 'left';
-  const total = measureSpaced(ctx, text, spacing);
-  let cursor = x;
-  if (align === 'center') cursor = x - total / 2;
-  else if (align === 'right') cursor = x - total;
-  for (const ch of text) {
-    if (mode !== 'stroke') ctx.fillText(ch, cursor, y);
-    if (mode === 'stroke' || mode === 'both') ctx.strokeText(ch, cursor, y);
-    cursor += ctx.measureText(ch).width + spacing;
-  }
-  ctx.globalAlpha = prevAlpha;
-}
-
-// 让大字地名自适应宽度：从 maxSize 开始逐步缩小
-function fitFontSize(ctx, text, maxWidth, maxSize, minSize, weight, family, spacing, style) {
-  let size = maxSize;
-  // 名称特别长时允许比 minSize 再缩小一些，宁可小一点也不要超出边界
-  const floor = Math.max(6, Math.floor(minSize * 0.6));
-  while (size > floor) {
-    setFont(ctx, size, weight, family, style);
-    if (measureSpaced(ctx, text, spacing) <= maxWidth) break;
-    size -= 1;
-  }
-  setFont(ctx, size, weight, family, style);
-  return size;
-}
-
-const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
-
-/**
- * 计算 cover 裁切区域。crop = { zoom: 1~4, x: -1~1, y: -1~1 }：
- * zoom 在“刚好铺满”的基础上放大；x / y 为取景窗口在可移动范围内的归一化位置
- * （-1 = 最左 / 最上，0 = 居中，1 = 最右 / 最下），保证窗口永远不会越出图片。
- */
-function coverRect(iw, ih, w, h, crop) {
-  const zoom = clamp((crop && crop.zoom) || 1, 1, MAX_CROP_ZOOM);
-  const r = Math.max(w / iw, h / ih) * zoom;
-  const sw = w / r;
-  const sh = h / r;
-  const cx = iw / 2 + clamp((crop && crop.x) || 0, -1, 1) * ((iw - sw) / 2);
-  const cy = ih / 2 + clamp((crop && crop.y) || 0, -1, 1) * ((ih - sh) / 2);
-  return { sx: cx - sw / 2, sy: cy - sh / 2, sw, sh };
-}
-
-function drawImageCover(ctx, img, x, y, w, h, crop) {
-  const c = coverRect(img.width, img.height, w, h, crop);
-  ctx.drawImage(img, c.sx, c.sy, c.sw, c.sh, x, y, w, h);
-}
-
-function fitInside(img, maxW, maxH) {
-  const r = Math.min(maxW / img.width, maxH / img.height);
-  return { w: img.width * r, h: img.height * r };
-}
-
-// 无 token / 下载失败时的本地极简底图（按坐标做伪随机，同一位置结果稳定）
-function drawFallbackMap(ctx, x, y, w, h, seed, pin, dark) {
-  const rand = mulberry32(seed);
-  ctx.fillStyle = dark ? '#1c1d1f' : '#ecebe7';
-  ctx.fillRect(x, y, w, h);
-
-  ctx.strokeStyle = dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)';
-  ctx.lineWidth = 0.6;
-  const step = 24;
-  ctx.beginPath();
-  for (let gx = x; gx <= x + w; gx += step) {
-    ctx.moveTo(gx, y);
-    ctx.lineTo(gx, y + h);
-  }
-  for (let gy = y; gy <= y + h; gy += step) {
-    ctx.moveTo(x, gy);
-    ctx.lineTo(x + w, gy);
-  }
-  ctx.stroke();
-
-  ctx.fillStyle = dark ? '#2a2c31' : '#dedde9';
-  ctx.globalAlpha = 0.45;
-  ctx.beginPath();
-  ctx.ellipse(x + w * (0.15 + rand() * 0.3), y + h * (0.6 + rand() * 0.3), w * 0.28, h * 0.12, rand(), 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 1;
-
-  ctx.lineCap = 'round';
-  for (let i = 0; i < 16; i++) {
-    const major = i % 4 === 0;
-    ctx.strokeStyle = dark
-      ? major ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.14)'
-      : major ? '#ffffff' : 'rgba(255,255,255,0.75)';
-    ctx.lineWidth = major ? 3.2 : 1.4;
-    ctx.beginPath();
-    const sx = x + rand() * w;
-    const sy = y + rand() * h;
-    ctx.moveTo(sx, sy);
-    ctx.bezierCurveTo(
-      x + rand() * w,
-      y + rand() * h,
-      x + rand() * w,
-      y + rand() * h,
-      x + rand() * w,
-      y + rand() * h
-    );
-    ctx.stroke();
-  }
-
-  if (pin) {
-    const px = x + w * pin.x;
-    const py = y + h * pin.y;
-    ctx.fillStyle = dark ? '#111111' : '#ffffff';
-    ctx.beginPath();
-    ctx.arc(px, py, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = dark ? '#ffffff' : '#111111';
-    ctx.beginPath();
-    ctx.arc(px, py, 3.6, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-
-// 用主题色给灰阶地图上色；设备不支持混合模式时退化为半透明色罩
-function applyTint(ctx, theme, x, y, w, h) {
-  const op = theme.dark ? 'screen' : 'multiply';
-  ctx.save();
-  ctx.globalCompositeOperation = op;
-  if (ctx.globalCompositeOperation !== op) {
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.globalAlpha = 0.55;
-  }
-  ctx.fillStyle = theme.tint;
-  ctx.fillRect(x, y, w, h);
-  ctx.restore();
-}
-
-/**
- * 绘制带主题色与不透明度的地图区域。
- * 浅色：白底 -> 地图(alpha) -> multiply 主题色；深色：黑底 -> 地图(alpha) -> screen 主题色。
- * alpha=0 时恰为纯主题色。
- */
-function drawMapRegion(ctx, mapImg, x, y, w, h, tpl, info, style) {
-  const { theme } = style;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(x, y, w, h);
-  ctx.clip();
-
-  ctx.fillStyle = theme.dark ? '#000000' : '#ffffff';
-  ctx.fillRect(x, y, w, h);
-
-  // 深色地图再压暗一档，避免 screen 叠加后主题色被“洗灰”
-  ctx.globalAlpha = theme.dark ? style.mapAlpha * 0.6 : style.mapAlpha;
-  if (mapImg) drawImageCover(ctx, mapImg, x, y, w, h);
-  else drawFallbackMap(ctx, x, y, w, h, info.seed, tpl.map.pin, theme.dark);
-  ctx.globalAlpha = 1;
-
-  applyTint(ctx, theme, x, y, w, h);
-  ctx.restore();
-}
-
-// 照片按不透明度绘制，低不透明度时会与下方的地图 / 主题色融合
-function withAlpha(ctx, alpha, draw) {
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  draw();
-  ctx.restore();
-}
-
-/* ------------------------------------------------------------------ */
-/* 三种海报样式                                                         */
-/* ------------------------------------------------------------------ */
-
-// 样式 A：地图全屏背景 + 拍立得相框（白边 + 投影）
-function paintPolaroid(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const ink = style.theme.ink;
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-
-  // 顶部：大字地名 + 坐标 / 日期
-  ctx.fillStyle = ink;
-  ctx.textBaseline = 'alphabetic';
-  fitFontSize(ctx, info.place, W - 48, 46, 22, 800, SANS, 2);
-  drawSpacedText(ctx, info.place, 24, 62, 2, 'left');
-
-  ctx.fillStyle = hexToRgba(ink, 0.72);
-  setFont(ctx, 8.5, 500, SANS);
-  drawSpacedText(ctx, info.coordText, 24, 82, 1.2, 'left');
-  drawSpacedText(ctx, info.dateText, W - 24, 82, 1.2, 'right');
-
-  // 拍立得相框
-  const pad = 12;
-  const bottom = 44;
-  const photo = fitInside(assets.photo, 252, 300);
-  const frameW = photo.w + pad * 2;
-  const frameH = photo.h + pad + bottom;
-  const areaTop = 100;
-  const areaBottom = H - 40;
-  const fx = (W - frameW) / 2;
-  const fy = areaTop + (areaBottom - areaTop - frameH) / 2;
-
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.32)';
-  ctx.shadowBlur = 26 * scale;
-  ctx.shadowOffsetX = 0;
-  ctx.shadowOffsetY = 10 * scale;
-  ctx.fillStyle = '#fbfaf7';
-  ctx.fillRect(fx, fy, frameW, frameH);
-  ctx.restore();
-
-  withAlpha(ctx, style.photoAlpha, () => {
-    ctx.drawImage(assets.photo, fx + pad, fy + pad, photo.w, photo.h);
-  });
-  ctx.strokeStyle = 'rgba(0,0,0,0.08)';
-  ctx.lineWidth = 0.5;
-  ctx.strokeRect(fx + pad, fy + pad, photo.w, photo.h);
-
-  // 相框底边小字（相框本身是浅色，文字固定深色）
-  const stripY = fy + pad + photo.h + 27;
-  ctx.fillStyle = '#2a2a2a';
-  setFont(ctx, 9.5, 400, SERIF, 'italic');
-  drawSpacedText(ctx, info.place, fx + pad, stripY, 1, 'left');
-  setFont(ctx, 8, 500, SANS);
-  ctx.fillStyle = '#777777';
-  drawSpacedText(ctx, info.dateText, fx + frameW - pad, stripY, 1, 'right');
-
-  // 底部标语
-  ctx.fillStyle = hexToRgba(ink, 0.85);
-  setFont(ctx, 8, 400, SERIF);
-  drawSpacedText(ctx, TAGLINE, W / 2, H - 20, 2.4, 'center');
-}
-
-// 样式 B：上 40% 地图 + 大字地名，下 60% 照片
-function paintSplit(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const mapH = H * 0.4;
-  const ink = style.theme.ink;
-
-  // 地图铺满整张海报，照片不透明度 < 1 时下半部分会透出地图
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-  withAlpha(ctx, style.photoAlpha, () => {
-    drawImageCover(ctx, assets.photo, 0, mapH, W, H - mapH, style.crop);
-  });
-
-  ctx.fillStyle = hexToRgba(ink, 0.75);
-  ctx.textBaseline = 'alphabetic';
-  setFont(ctx, 8.5, 500, SANS);
-  drawSpacedText(ctx, info.coordText, 22, 30, 1.2, 'left');
-  drawSpacedText(ctx, info.dateText, W - 22, 30, 1.2, 'right');
-
-  ctx.fillStyle = ink;
-  fitFontSize(ctx, info.place, W - 44, 66, 26, 800, SANS, 3);
-  drawSpacedText(ctx, info.place, 22, mapH - 22, 3, 'left');
-
-  ctx.fillStyle = style.photoAlpha >= 0.5 ? 'rgba(255,255,255,0.9)' : hexToRgba(ink, 0.8);
-  setFont(ctx, 7.5, 400, SERIF);
-  drawSpacedText(ctx, TAGLINE, W / 2, H - 16, 2.2, 'center');
-}
-
-// 样式 C：照片全屏 + 底部渐变 + 圆形地图徽章
-function paintMedallion(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const ink = style.theme.ink;
-  const onPhoto = style.photoAlpha >= 0.5;
-  const textColor = onPhoto ? '#ffffff' : ink;
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-
-  withAlpha(ctx, style.photoAlpha, () => {
-    drawImageCover(ctx, assets.photo, 0, 0, W, H, style.crop);
-    const gradTop = H * 0.52;
-    const grad = ctx.createLinearGradient(0, gradTop, 0, H);
-    grad.addColorStop(0, 'rgba(0,0,0,0)');
-    grad.addColorStop(1, 'rgba(0,0,0,0.72)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, gradTop, W, H - gradTop);
-  });
-
-  // 徽章圆心与地图中的定位针位置一致（见 TEMPLATES）
-  const r = 48;
-  const cx = W * tpl.map.pin.x;
-  const cy = H * tpl.map.pin.y;
-
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.35)';
-  ctx.shadowBlur = 14 * scale;
-  ctx.shadowOffsetY = 4 * scale;
-  ctx.fillStyle = '#ffffff';
-  ctx.beginPath();
-  ctx.arc(cx, cy, r + 3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.clip();
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, Object.assign({}, style, { mapAlpha: 1 }));
-  ctx.restore();
-
-  const tx = cx + r + 18;
-  const maxW = W - tx - 24;
-  ctx.fillStyle = textColor;
-  ctx.textBaseline = 'alphabetic';
-  fitFontSize(ctx, info.place, maxW, 40, 18, 800, SANS, 2);
-  drawSpacedText(ctx, info.place, tx, cy - 2, 2, 'left');
-
-  ctx.fillStyle = onPhoto ? 'rgba(255,255,255,0.85)' : hexToRgba(ink, 0.8);
-  setFont(ctx, 8.5, 500, SANS);
-  drawSpacedText(ctx, info.coordText, tx, cy + 18, 1.1, 'left');
-  drawSpacedText(ctx, info.dateText, tx, cy + 34, 1.1, 'left');
-
-  ctx.fillStyle = onPhoto ? 'rgba(255,255,255,0.8)' : hexToRgba(ink, 0.7);
-  setFont(ctx, 7.5, 400, SERIF);
-  drawSpacedText(ctx, TAGLINE, W / 2, H - 14, 2.2, 'center');
-}
-
-/* ------------------------------------------------------------------ */
-/* 氛围模板：杂志封面 / 胶片 / 明信片 / 画廊展签 / 玻璃卡片 / 巨字            */
-/* ------------------------------------------------------------------ */
-
-function roundedRectPath(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.arcTo(x + w, y, x + w, y + r, r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
-  ctx.lineTo(x + r, y + h);
-  ctx.arcTo(x, y + h, x, y + h - r, r);
-  ctx.lineTo(x, y + r);
-  ctx.arcTo(x, y, x + r, y, r);
-  ctx.closePath();
-}
-
-/**
- * 以定位针为中心，从整张地图上截取 1:1 的一小块（迷你地图），并按主题上色。
- * 调用方可先设置圆角 / 圆形 clip。
- */
-function drawMapWindow(ctx, mapImg, x, y, w, h, tpl, info, style) {
-  const { theme } = style;
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(x, y, w, h);
-  ctx.clip();
-  ctx.fillStyle = theme.dark ? '#000000' : '#ffffff';
-  ctx.fillRect(x, y, w, h);
-  ctx.globalAlpha = theme.dark ? 0.6 : 1;
-  if (mapImg) {
-    const k = mapImg.width / POSTER_W;
-    const sw = Math.min(w * k, mapImg.width);
-    const sh = Math.min(h * k, mapImg.height);
-    const sx = clamp(mapImg.width * tpl.map.pin.x - sw / 2, 0, mapImg.width - sw);
-    const sy = clamp(mapImg.height * tpl.map.pin.y - sh / 2, 0, mapImg.height - sh);
-    ctx.drawImage(mapImg, sx, sy, sw, sh, x, y, w, h);
-  } else {
-    drawFallbackMap(ctx, x, y, w, h, info.seed, { x: 0.5, y: 0.5 }, theme.dark);
-  }
-  ctx.globalAlpha = 1;
-  applyTint(ctx, theme, x, y, w, h);
-  ctx.restore();
-}
-
-function photoText(style) {
-  const onPhoto = style.photoAlpha >= 0.5;
-  const ink = style.theme.ink;
-  return {
-    main: onPhoto ? '#ffffff' : ink,
-    sub: onPhoto ? 'rgba(255,255,255,0.82)' : hexToRgba(ink, 0.8)
-  };
-}
-
-// 全屏照片 + 上下暗角，杂志封面 / 玻璃卡片 / 巨字共用
-function drawFullBleedPhoto(ctx, assets, style, topShade, bottomShade) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  withAlpha(ctx, style.photoAlpha, () => {
-    drawImageCover(ctx, assets.photo, 0, 0, W, H, style.crop);
-    if (topShade) {
-      const g = ctx.createLinearGradient(0, 0, 0, H * 0.4);
-      g.addColorStop(0, `rgba(0,0,0,${topShade})`);
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, W, H * 0.4);
-    }
-    if (bottomShade) {
-      const g = ctx.createLinearGradient(0, H * 0.5, 0, H);
-      g.addColorStop(0, 'rgba(0,0,0,0)');
-      g.addColorStop(1, `rgba(0,0,0,${bottomShade})`);
-      ctx.fillStyle = g;
-      ctx.fillRect(0, H * 0.5, W, H * 0.5);
-    }
-  });
-}
-
-// 杂志封面：超大衬线刊头 + 细线栏目 + 封面标语 + 迷你地图
-function paintMagazine(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const { main, sub } = photoText(style);
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-  drawFullBleedPhoto(ctx, assets, style, 0.5, 0.62);
-
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = main;
-  const size = fitFontSize(ctx, info.place, W - 44, 96, 30, 700, SERIF, 3);
-  const baseline = 30 + size * 0.8;
-  drawSpacedText(ctx, info.place, W / 2, baseline, 3, 'center');
-
-  ctx.strokeStyle = sub;
-  ctx.lineWidth = 0.6;
-  ctx.beginPath();
-  ctx.moveTo(22, baseline + 14);
-  ctx.lineTo(W - 22, baseline + 14);
-  ctx.stroke();
-  ctx.fillStyle = sub;
-  setFont(ctx, 8, 500, SANS);
-  drawSpacedText(ctx, info.dateText, 22, baseline + 29, 1.6, 'left');
-  drawSpacedText(ctx, info.coordText, W - 22, baseline + 29, 1.2, 'right');
-
-  const mapSize = 92;
-  const mx = W - 22 - mapSize;
-  const my = H - 24 - mapSize;
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.4)';
-  ctx.shadowBlur = 14 * scale;
-  ctx.shadowOffsetY = 4 * scale;
-  ctx.fillStyle = '#ffffff';
-  roundedRectPath(ctx, mx - 2.5, my - 2.5, mapSize + 5, mapSize + 5, 6);
-  ctx.fill();
-  ctx.restore();
-  ctx.save();
-  roundedRectPath(ctx, mx, my, mapSize, mapSize, 4);
-  ctx.clip();
-  drawMapWindow(ctx, assets.map, mx, my, mapSize, mapSize, tpl, info, style);
-  ctx.restore();
-
-  ctx.fillStyle = sub;
-  setFont(ctx, 7.5, 600, SANS);
-  drawSpacedText(ctx, 'SPECIAL ISSUE', 22, H - 104, 3.2, 'left');
-  ctx.fillStyle = main;
-  setFont(ctx, 27, 400, SERIF, 'italic');
-  drawSpacedText(ctx, 'Captured Moment,', 22, H - 70, 0.4, 'left');
-  drawSpacedText(ctx, 'Lasting Place.', 22, H - 40, 0.4, 'left');
-}
-
-const FILM_STRIP = { x: 44, w: POSTER_W - 88 };
-const FILM_AMBER = '#f2a03d';
-const MONTH_INDEX = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
-
-// 相机背刻风格日期： '24 06 16
-function filmDate(dateText) {
-  const m = /^([A-Z]{3}) (\d{1,2}), (\d{4})$/.exec(dateText || '');
-  if (!m || !MONTH_INDEX[m[1]]) return dateText || '';
-  const pad = (n) => String(n).padStart(2, '0');
-  return `'${m[3].slice(2)}  ${pad(MONTH_INDEX[m[1]])}  ${pad(Number(m[2]))}`;
-}
-
-// 胶片：暗房底色 + 35mm 片基与齿孔 + 琥珀色背刻日期
-function paintFilm(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-  ctx.fillStyle = 'rgba(9,8,7,0.88)';
-  ctx.fillRect(0, 0, W, H);
-
-  const sx = FILM_STRIP.x;
-  const sw = FILM_STRIP.w;
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.6)';
-  ctx.shadowBlur = 18 * scale;
-  ctx.fillStyle = '#17130f';
-  ctx.fillRect(sx, 0, sw, H);
-  ctx.restore();
-
-  ctx.fillStyle = 'rgba(236,228,212,0.92)';
-  for (let y = 9; y < H - 8; y += 21) {
-    roundedRectPath(ctx, sx + 9, y, 9, 12, 2.2);
-    ctx.fill();
-    roundedRectPath(ctx, sx + sw - 18, y, 9, 12, 2.2);
-    ctx.fill();
-  }
-
-  const p = FILM_PHOTO;
-  ctx.fillStyle = '#000000';
-  ctx.fillRect(p.left - 1, p.top - 1, p.w + 2, p.h + 2);
-  withAlpha(ctx, style.photoAlpha, () => {
-    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
-  });
-
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = FILM_AMBER;
-  setFont(ctx, 7, 700, SANS);
-  drawSpacedText(ctx, 'GEOPICS 400', p.left, 38, 1.8, 'left');
-  drawSpacedText(ctx, '12A', p.left + p.w, 38, 1.8, 'right');
-
-  const bottom = p.top + p.h;
-  ctx.save();
-  ctx.shadowColor = 'rgba(242,160,61,0.85)';
-  ctx.shadowBlur = 5 * scale;
-  ctx.fillStyle = FILM_AMBER;
-  setFont(ctx, 15, 600, SANS);
-  drawSpacedText(ctx, filmDate(info.dateText), p.left, bottom + 30, 2.2, 'left');
-  ctx.restore();
-
-  ctx.fillStyle = '#efe9dd';
-  const maxW = p.w - 70;
-  fitFontSize(ctx, info.place, maxW, 24, 12, 700, SANS, 3);
-  drawSpacedText(ctx, info.place, p.left, bottom + 54, 3, 'left');
-  ctx.fillStyle = 'rgba(239,233,221,0.6)';
-  setFont(ctx, 7.5, 500, SANS);
-  drawSpacedText(ctx, info.coordText, p.left, bottom + 70, 1.2, 'left');
-
-  const ms = 54;
-  const mx = p.left + p.w - ms;
-  const my = bottom + 14;
-  ctx.save();
-  roundedRectPath(ctx, mx, my, ms, ms, 3);
-  ctx.clip();
-  drawMapWindow(ctx, assets.map, mx, my, ms, ms, tpl, info, style);
-  ctx.restore();
-  ctx.strokeStyle = 'rgba(239,233,221,0.7)';
-  ctx.lineWidth = 0.8;
-  roundedRectPath(ctx, mx, my, ms, ms, 3);
-  ctx.stroke();
-
-  ctx.fillStyle = 'rgba(242,160,61,0.75)';
-  setFont(ctx, 6, 500, SANS);
-  drawSpacedText(ctx, TAGLINE, W / 2, H - 12, 1.8, 'center');
-}
-
-function drawPerforatedStamp(ctx, x, y, w, h, holeColor) {
-  ctx.fillStyle = '#fffdf6';
-  ctx.fillRect(x, y, w, h);
-  ctx.fillStyle = holeColor;
-  const step = 8;
-  for (let px = x + step / 2; px < x + w; px += step) {
-    ctx.beginPath();
-    ctx.arc(px, y, 2.4, 0, Math.PI * 2);
-    ctx.arc(px, y + h, 2.4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  for (let py = y + step / 2; py < y + h; py += step) {
-    ctx.beginPath();
-    ctx.arc(x, py, 2.4, 0, Math.PI * 2);
-    ctx.arc(x + w, py, 2.4, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-
-// 明信片：纸张卡片 + 拍立得式照片 + 手写地址线 + 邮票 + 邮戳
-function paintPostcard(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const paper = '#f7f1e3';
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-
-  const cx = 22;
-  const cy = 26;
-  const cw = W - 44;
-  const ch = H - 52;
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.3)';
-  ctx.shadowBlur = 22 * scale;
-  ctx.shadowOffsetY = 8 * scale;
-  ctx.fillStyle = paper;
-  roundedRectPath(ctx, cx, cy, cw, ch, 4);
-  ctx.fill();
-  ctx.restore();
-  ctx.strokeStyle = 'rgba(120,100,70,0.22)';
-  ctx.lineWidth = 0.6;
-  ctx.strokeRect(cx + 7, cy + 7, cw - 14, ch - 14);
-
-  const p = POSTCARD_PHOTO;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(p.left - 4, p.top - 4, p.w + 8, p.h + 8);
-  withAlpha(ctx, style.photoAlpha, () => {
-    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
-  });
-
-  ctx.textBaseline = 'alphabetic';
-  const ty = p.top + p.h + 24;
-  ctx.fillStyle = '#8a7c66';
-  setFont(ctx, 7.5, 600, SANS);
-  drawSpacedText(ctx, 'GREETINGS FROM', p.left, ty, 3, 'left');
-  ctx.fillStyle = '#2b2622';
-  fitFontSize(ctx, info.place, 200, 36, 16, 700, SERIF, 1, 'italic');
-  drawSpacedText(ctx, info.place, p.left, ty + 38, 1, 'left');
-
-  ctx.save();
-  ctx.strokeStyle = 'rgba(60,50,40,0.38)';
-  ctx.lineWidth = 0.6;
-  ctx.setLineDash([2, 3]);
-  const lines = [ty + 62, ty + 84, ty + 106];
-  lines.forEach((ly) => {
-    ctx.beginPath();
-    ctx.moveTo(p.left, ly);
-    ctx.lineTo(p.left + 168, ly);
-    ctx.stroke();
-  });
-  ctx.restore();
-  ctx.fillStyle = '#5a4d3c';
-  setFont(ctx, 9.5, 400, SERIF, 'italic');
-  drawSpacedText(ctx, info.coordText, p.left + 2, lines[0] - 3, 0.6, 'left');
-  drawSpacedText(ctx, info.dateText, p.left + 2, lines[1] - 3, 0.6, 'left');
-  drawSpacedText(ctx, 'Wish you were here', p.left + 2, lines[2] - 3, 0.6, 'left');
-
-  const stampW = 80;
-  const stampH = 100;
-  const sx = p.left + p.w - stampW;
-  const sy = p.top + p.h + 14;
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.18)';
-  ctx.shadowBlur = 5 * scale;
-  ctx.shadowOffsetY = 1.5 * scale;
-  drawPerforatedStamp(ctx, sx, sy, stampW, stampH, paper);
-  ctx.restore();
-  drawPerforatedStamp(ctx, sx, sy, stampW, stampH, paper);
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(sx + 7, sy + 7, stampW - 14, stampH - 32);
-  ctx.clip();
-  drawMapWindow(ctx, assets.map, sx + 7, sy + 7, stampW - 14, stampH - 32, tpl, info, style);
-  ctx.restore();
-  ctx.fillStyle = '#3a3a3a';
-  setFont(ctx, 7.5, 800, SANS);
-  drawSpacedText(ctx, 'GEOPICS', sx + stampW / 2, sy + stampH - 14, 2.2, 'center');
-  setFont(ctx, 5.5, 500, SANS);
-  ctx.fillStyle = '#8a8a86';
-  drawSpacedText(ctx, 'AIR MAIL', sx + stampW / 2, sy + stampH - 6.5, 1.8, 'center');
-
-  // 邮戳：斜置双圈 + 地名日期 + 波浪消印线
-  const pmx = sx - 6;
-  const pmy = sy + stampH - 26;
-  ctx.save();
-  ctx.translate(pmx, pmy);
-  ctx.rotate((-12 * Math.PI) / 180);
-  ctx.globalAlpha = 0.78;
-  ctx.strokeStyle = '#30426e';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(0, 0, 30, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.lineWidth = 0.7;
-  ctx.beginPath();
-  ctx.arc(0, 0, 25, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.lineWidth = 1.1;
-  for (let i = -2; i <= 2; i++) {
-    ctx.beginPath();
-    for (let x = -100; x <= -33; x += 2) {
-      const y = i * 5.5 + Math.sin(x / 4.2) * 2;
-      if (x === -100) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-  }
-  ctx.fillStyle = '#30426e';
-  fitFontSize(ctx, info.place, 40, 9, 5, 800, SANS, 0.8);
-  drawSpacedText(ctx, info.place, 0, -2, 0.8, 'center');
-  setFont(ctx, 5.5, 600, SANS);
-  drawSpacedText(ctx, info.dateText, 0, 9, 0.5, 'center');
-  ctx.restore();
-
-  ctx.fillStyle = '#8a7c66';
-  setFont(ctx, 7, 400, SERIF);
-  drawSpacedText(ctx, TAGLINE, W / 2, cy + ch - 18, 2.2, 'center');
-}
-
-// 画廊展签：地图作墙面，黑框 + 白色卡纸 + 博物馆式说明牌
-function paintGallery(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const ink = style.theme.ink;
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = hexToRgba(ink, 0.7);
-  setFont(ctx, 7.5, 500, SERIF);
-  drawSpacedText(ctx, 'PERMANENT COLLECTION', W / 2, 34, 3.4, 'center');
-
-  const bandTop = 54;
-  const bandH = 358;
-  const mat = 24;
-  const photo = fitInside(assets.photo, 240, 310);
-  const fw = photo.w + mat * 2;
-  const fh = photo.h + mat * 2;
-  const fx = (W - fw) / 2;
-  const fy = bandTop + (bandH - fh) / 2;
-
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.38)';
-  ctx.shadowBlur = 28 * scale;
-  ctx.shadowOffsetY = 12 * scale;
-  ctx.fillStyle = '#181614';
-  ctx.fillRect(fx - 4, fy - 4, fw + 8, fh + 8);
-  ctx.restore();
-  ctx.fillStyle = '#faf8f2';
-  ctx.fillRect(fx, fy, fw, fh);
-  ctx.strokeStyle = 'rgba(0,0,0,0.22)';
-  ctx.lineWidth = 0.8;
-  ctx.strokeRect(fx + mat - 1, fy + mat - 1, photo.w + 2, photo.h + 2);
-  withAlpha(ctx, style.photoAlpha, () => {
-    ctx.drawImage(assets.photo, fx + mat, fy + mat, photo.w, photo.h);
-  });
-
-  const pw = 176;
-  const ph = 60;
-  const px = fx + fw - pw;
-  const py = bandTop + bandH + 22;
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.22)';
-  ctx.shadowBlur = 8 * scale;
-  ctx.shadowOffsetY = 2 * scale;
-  ctx.fillStyle = '#fdfcf8';
-  ctx.fillRect(px, py, pw, ph);
-  ctx.restore();
-  ctx.fillStyle = '#1a1a1a';
-  fitFontSize(ctx, info.place, pw - 24, 11, 7, 800, SANS, 1.6);
-  drawSpacedText(ctx, info.place, px + 12, py + 19, 1.6, 'left');
-  ctx.fillStyle = '#555555';
-  setFont(ctx, 8.5, 400, SERIF, 'italic');
-  drawSpacedText(ctx, info.coordText, px + 12, py + 33, 0.4, 'left');
-  ctx.fillStyle = '#8a8a86';
-  setFont(ctx, 6.5, 500, SANS);
-  drawSpacedText(ctx, `${info.dateText}  ·  ARCHIVAL PIGMENT PRINT`, px + 12, py + 48, 0.9, 'left');
-
-  ctx.fillStyle = hexToRgba(ink, 0.7);
-  setFont(ctx, 7.5, 400, SERIF);
-  drawSpacedText(ctx, TAGLINE, W / 2, H - 20, 2.4, 'center');
-}
-
-// 玻璃卡片：全屏照片 + 底部半透明深色玻璃面板（含迷你地图）
-function paintGlass(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-  drawFullBleedPhoto(ctx, assets, style, 0.28, 0.25);
-
-  ctx.textBaseline = 'alphabetic';
-  setFont(ctx, 8, 600, SANS);
-  const chipText = info.dateText;
-  const chipW = measureSpaced(ctx, chipText, 1.6) + 36;
-  const chipX = 20;
-  const chipY = 22;
-  ctx.fillStyle = 'rgba(18,20,24,0.42)';
-  roundedRectPath(ctx, chipX, chipY, chipW, 24, 12);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(255,255,255,0.32)';
-  ctx.lineWidth = 0.6;
-  ctx.stroke();
-  ctx.fillStyle = '#ffffff';
-  ctx.beginPath();
-  ctx.arc(chipX + 13, chipY + 12, 2.8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = 'rgba(255,255,255,0.92)';
-  drawSpacedText(ctx, chipText, chipX + 23, chipY + 15.3, 1.6, 'left');
-
-  const x = 20;
-  const y = H - 176;
-  const w = W - 40;
-  const h = 156;
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.35)';
-  ctx.shadowBlur = 24 * scale;
-  ctx.shadowOffsetY = 8 * scale;
-  const glass = ctx.createLinearGradient(x, y, x + w, y + h);
-  glass.addColorStop(0, 'rgba(24,27,32,0.62)');
-  glass.addColorStop(1, 'rgba(14,16,20,0.42)');
-  ctx.fillStyle = glass;
-  roundedRectPath(ctx, x, y, w, h, 22);
-  ctx.fill();
-  ctx.restore();
-  ctx.strokeStyle = 'rgba(255,255,255,0.28)';
-  ctx.lineWidth = 0.8;
-  roundedRectPath(ctx, x, y, w, h, 22);
-  ctx.stroke();
-
-  const ms = 128;
-  const mx = x + 14;
-  const my = y + 14;
-  ctx.save();
-  roundedRectPath(ctx, mx, my, ms, ms, 16);
-  ctx.clip();
-  drawMapWindow(ctx, assets.map, mx, my, ms, ms, tpl, info, style);
-  ctx.restore();
-  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-  ctx.lineWidth = 0.8;
-  roundedRectPath(ctx, mx, my, ms, ms, 16);
-  ctx.stroke();
-
-  const tx = mx + ms + 18;
-  const tw = x + w - 16 - tx;
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
-  setFont(ctx, 6.5, 600, SANS);
-  drawSpacedText(ctx, 'LOCATION', tx, y + 30, 3, 'left');
-  ctx.fillStyle = '#ffffff';
-  fitFontSize(ctx, info.place, tw, 32, 14, 800, SANS, 1.6);
-  drawSpacedText(ctx, info.place, tx, y + 64, 1.6, 'left');
-  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-  ctx.lineWidth = 0.5;
-  ctx.beginPath();
-  ctx.moveTo(tx, y + 78);
-  ctx.lineTo(tx + tw, y + 78);
-  ctx.stroke();
-  ctx.fillStyle = 'rgba(255,255,255,0.86)';
-  setFont(ctx, 8.5, 500, SANS);
-  drawSpacedText(ctx, info.coordText, tx, y + 98, 1, 'left');
-  drawSpacedText(ctx, info.dateText, tx, y + 114, 1, 'left');
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
-  setFont(ctx, 6.5, 400, SERIF, 'italic');
-  drawSpacedText(ctx, TAGLINE, tx, y + 140, 0.9, 'left');
-}
-
-// 巨字：全屏照片 + 镂空巨型地名 + 竖排标语 + 圆形迷你地图
-function paintTypo(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const onPhoto = style.photoAlpha >= 0.5;
-  const { main, sub } = photoText(style);
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-  drawFullBleedPhoto(ctx, assets, style, 0.3, 0.42);
-  withAlpha(ctx, style.photoAlpha, () => {
-    ctx.fillStyle = 'rgba(0,0,0,0.16)';
-    ctx.fillRect(0, 0, W, H);
-  });
-
-  ctx.textBaseline = 'alphabetic';
-  ctx.lineJoin = 'round';
-  const size = fitFontSize(ctx, info.place, W - 28, 140, 38, 900, SANS, 2);
-  const baseline = H * 0.7;
-  ctx.fillStyle = onPhoto ? 'rgba(255,255,255,0.14)' : hexToRgba(style.theme.ink, 0.12);
-  ctx.strokeStyle = main;
-  ctx.lineWidth = Math.max(0.9, size / 90);
-  drawSpacedText(ctx, info.place, 14, baseline, 2, 'left', 'both');
-
-  ctx.strokeStyle = sub;
-  ctx.lineWidth = 0.6;
-  ctx.beginPath();
-  ctx.moveTo(20, baseline + 18);
-  ctx.lineTo(W - 20, baseline + 18);
-  ctx.stroke();
-  ctx.fillStyle = main;
-  setFont(ctx, 8.5, 500, SANS);
-  drawSpacedText(ctx, info.coordText, 20, baseline + 36, 1.6, 'left');
-  drawSpacedText(ctx, info.dateText, W - 20, baseline + 36, 1.6, 'right');
-
-  const r = 30;
-  const mx = 20 + r;
-  const my = 22 + r;
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.35)';
-  ctx.shadowBlur = 12 * scale;
-  ctx.shadowOffsetY = 3 * scale;
-  ctx.fillStyle = '#ffffff';
-  ctx.beginPath();
-  ctx.arc(mx, my, r + 2.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(mx, my, r, 0, Math.PI * 2);
-  ctx.clip();
-  drawMapWindow(ctx, assets.map, mx - r, my - r, r * 2, r * 2, tpl, info, style);
-  ctx.restore();
-
-  ctx.fillStyle = main;
-  setFont(ctx, 9, 800, SANS);
-  drawSpacedText(ctx, 'GEOPICS', W - 20, 40, 4.2, 'right');
-
-  ctx.save();
-  ctx.translate(W - 15, 190);
-  ctx.rotate(-Math.PI / 2);
-  ctx.fillStyle = sub;
-  setFont(ctx, 6.5, 500, SERIF);
-  drawSpacedText(ctx, TAGLINE, 0, 0, 3.2, 'center');
-  ctx.restore();
-}
-
-/* ------------------------------------------------------------------ */
-/* 简约模板（适合批量）：白卡 / 底栏 / 细框 / 侧栏 / 影幕 / 坐标            */
-/* 版式固定、文字量少，照片方向与地名长短不同也能保持整批统一               */
-/* ------------------------------------------------------------------ */
-
-function splitCoord(info) {
-  const parts = (info.coordText || '').split('  ');
-  return { lat: parts[0] || '', lon: parts[1] || '' };
-}
-
-// 极简白卡：宽边留白，照片下方一行细字说明
-function paintMat(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const ink = style.theme.ink;
-  const p = MAT_PHOTO;
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-  withAlpha(ctx, style.photoAlpha, () => {
-    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
-  });
-
-  ctx.textBaseline = 'alphabetic';
-  const baseline = p.top + p.h + 36;
-  ctx.fillStyle = ink;
-  setFont(ctx, 8.5, 500, SANS);
-  const dateW = measureSpaced(ctx, info.dateText, 1.4);
-  fitFontSize(ctx, info.place, W - p.left * 2 - dateW - 24, 17, 9, 700, SANS, 3);
-  drawSpacedText(ctx, info.place, p.left, baseline, 3, 'left');
-  setFont(ctx, 8.5, 500, SANS);
-  ctx.fillStyle = hexToRgba(ink, 0.75);
-  drawSpacedText(ctx, info.dateText, W - p.left, baseline, 1.4, 'right');
-
-  ctx.strokeStyle = hexToRgba(ink, 0.25);
-  ctx.lineWidth = 0.6;
-  ctx.beginPath();
-  ctx.moveTo(p.left, baseline + 14);
-  ctx.lineTo(W - p.left, baseline + 14);
-  ctx.stroke();
-
-  ctx.fillStyle = hexToRgba(ink, 0.6);
-  setFont(ctx, 7.5, 400, SANS);
-  drawSpacedText(ctx, info.coordText, p.left, baseline + 31, 1.2, 'left');
-}
-
-// 底栏：照片通栏，底部一条主题色信息栏，右侧迷你地图
-function paintBar(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const ink = style.theme.ink;
-  const p = BAR_PHOTO;
-  const top = H - BAR_H;
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-  withAlpha(ctx, style.photoAlpha, () => {
-    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
-  });
-
-  const ms = 60;
-  const mx = W - 24 - ms;
-  const my = top + (BAR_H - ms) / 2;
-  ctx.save();
-  roundedRectPath(ctx, mx, my, ms, ms, 6);
-  ctx.clip();
-  drawMapWindow(ctx, assets.map, mx, my, ms, ms, tpl, info, style);
-  ctx.restore();
-  ctx.strokeStyle = hexToRgba(ink, 0.3);
-  ctx.lineWidth = 0.6;
-  roundedRectPath(ctx, mx, my, ms, ms, 6);
-  ctx.stroke();
-
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = ink;
-  fitFontSize(ctx, info.place, mx - 16 - 24, 22, 11, 800, SANS, 2);
-  drawSpacedText(ctx, info.place, 24, top + 42, 2, 'left');
-  ctx.fillStyle = hexToRgba(ink, 0.72);
-  setFont(ctx, 8, 500, SANS);
-  drawSpacedText(ctx, info.coordText, 24, top + 62, 1.1, 'left');
-  drawSpacedText(ctx, info.dateText, 24, top + 78, 1.1, 'left');
-}
-
-// 细框：整幅照片 + 内缩发丝线框，地名居中置于底部
-function paintFrame(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const { main, sub } = photoText(style);
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-  drawFullBleedPhoto(ctx, assets, style, 0.2, 0.5);
-
-  const inset = 16;
-  ctx.strokeStyle = sub;
-  ctx.lineWidth = 0.8;
-  ctx.strokeRect(inset, inset, W - inset * 2, H - inset * 2);
-
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = sub;
-  setFont(ctx, 7.5, 500, SANS);
-  drawSpacedText(ctx, info.dateText, W / 2, inset + 26, 4, 'center');
-
-  ctx.fillStyle = main;
-  fitFontSize(ctx, info.place, W - 96, 30, 13, 300, SANS, 8);
-  drawSpacedText(ctx, info.place, W / 2, H - 78, 8, 'center');
-
-  ctx.strokeStyle = sub;
-  ctx.lineWidth = 0.6;
-  ctx.beginPath();
-  ctx.moveTo(W / 2 - 14, H - 64);
-  ctx.lineTo(W / 2 + 14, H - 64);
-  ctx.stroke();
-
-  ctx.fillStyle = sub;
-  setFont(ctx, 7.5, 400, SANS);
-  drawSpacedText(ctx, info.coordText, W / 2, H - 46, 2.4, 'center');
-}
-
-// 侧栏：左侧照片，右侧细长主题色栏，竖排地名从下往上阅读，顶部圆形迷你地图
-function paintRail(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const ink = style.theme.ink;
-  const p = RAIL_PHOTO;
-  const cx = W - RAIL_W / 2;
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-  withAlpha(ctx, style.photoAlpha, () => {
-    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
-  });
-
-  const r = 17;
-  const my = 42;
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(cx, my, r, 0, Math.PI * 2);
-  ctx.clip();
-  drawMapWindow(ctx, assets.map, cx - r, my - r, r * 2, r * 2, tpl, info, style);
-  ctx.restore();
-  ctx.strokeStyle = hexToRgba(ink, 0.35);
-  ctx.lineWidth = 0.6;
-  ctx.beginPath();
-  ctx.arc(cx, my, r, 0, Math.PI * 2);
-  ctx.stroke();
-
-  ctx.save();
-  ctx.translate(cx - 3, H - 30);
-  ctx.rotate(-Math.PI / 2);
-  ctx.textBaseline = 'alphabetic';
-  const maxW = H - 30 - (my + r + 24);
-  ctx.fillStyle = ink;
-  fitFontSize(ctx, info.place, maxW, 20, 10, 800, SANS, 3);
-  drawSpacedText(ctx, info.place, 0, -4, 3, 'left');
-  ctx.fillStyle = hexToRgba(ink, 0.72);
-  setFont(ctx, 7.5, 500, SANS);
-  drawSpacedText(ctx, info.coordText, 0, 12, 1.2, 'left');
-  drawSpacedText(ctx, info.dateText, 0, 24, 1.2, 'left');
-  ctx.restore();
-}
-
-// 影幕：宽银幕画幅，上下留出主题色黑边，字幕式地名
-function paintCinema(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const ink = style.theme.ink;
-  const p = CINEMA_PHOTO;
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-  withAlpha(ctx, style.photoAlpha, () => {
-    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
-  });
-
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = hexToRgba(ink, 0.6);
-  setFont(ctx, 7, 500, SANS);
-  drawSpacedText(ctx, info.dateText, 24, p.top - 18, 3, 'left');
-  drawSpacedText(ctx, 'LOCATION', W - 24, p.top - 18, 3.4, 'right');
-
-  const bottom = p.top + p.h;
-  ctx.fillStyle = ink;
-  fitFontSize(ctx, info.place, W - 64, 34, 14, 300, SANS, 9);
-  drawSpacedText(ctx, info.place, W / 2, bottom + 62, 9, 'center');
-  ctx.fillStyle = hexToRgba(ink, 0.65);
-  setFont(ctx, 7.5, 400, SANS);
-  drawSpacedText(ctx, info.coordText, W / 2, bottom + 88, 2.6, 'center');
-}
-
-// 坐标：整幅照片 + 四角测绘标记，经纬度作为主视觉
-function paintCoord(ctx, scale, assets, info, tpl, style) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const { main, sub } = photoText(style);
-  const { lat, lon } = splitCoord(info);
-
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
-  drawFullBleedPhoto(ctx, assets, style, 0.22, 0.62);
-
-  const m = 20;
-  const t = 12;
-  ctx.strokeStyle = sub;
-  ctx.lineWidth = 0.8;
-  ctx.beginPath();
-  [[m, m, 1, 1], [W - m, m, -1, 1], [m, H - m, 1, -1], [W - m, H - m, -1, -1]].forEach(([x, y, dx, dy]) => {
-    ctx.moveTo(x + dx * t, y);
-    ctx.lineTo(x, y);
-    ctx.lineTo(x, y + dy * t);
-  });
-  ctx.stroke();
-
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = sub;
-  setFont(ctx, 7.5, 500, SANS);
-  drawSpacedText(ctx, info.place, m + 10, m + 24, 3, 'left');
-  drawSpacedText(ctx, info.dateText, W - m - 10, m + 24, 1.6, 'right');
-
-  ctx.fillStyle = main;
-  const size = fitFontSize(ctx, lon.length > lat.length ? lon : lat, W - 2 * (m + 10), 30, 14, 200, SANS, 2);
-  drawSpacedText(ctx, lat, m + 10, H - m - 34 - size * 1.15, 2, 'left');
-  drawSpacedText(ctx, lon, m + 10, H - m - 34, 2, 'left');
-}
-
-// 免费版水印：整幅斜向平铺，深浅双层描边，任何底色上都清晰可见
-function drawWatermark(ctx) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  const text = 'GEOPICS · PREVIEW';
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(0, 0, W, H);
-  ctx.clip();
-  ctx.textBaseline = 'middle';
-  ctx.textAlign = 'center';
-  setFont(ctx, 13, 700, SANS);
-  ctx.translate(W / 2, H / 2);
-  ctx.rotate(-Math.PI / 6);
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = 1.6;
-  const stepX = 320;
-  const stepY = 170;
-  const span = Math.ceil(Math.hypot(W, H) / 2 / stepY) + 1;
-  for (let row = -span; row <= span; row += 1) {
-    const offset = (row % 2) * (stepX / 2);
-    for (let col = -2; col <= 2; col += 1) {
-      const x = col * stepX + offset;
-      const y = row * stepY;
-      ctx.strokeStyle = 'rgba(0,0,0,0.12)';
-      ctx.strokeText(text, x, y);
-      ctx.fillStyle = 'rgba(255,255,255,0.34)';
-      ctx.fillText(text, x, y);
-    }
-  }
-  ctx.restore();
-}
-
-// GEOPICS 标志：地球经纬线 + 定位点
-function drawLogoMark(ctx, cx, cy, r, color) {
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = 1.3;
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.lineWidth = 0.8;
-  ctx.beginPath();
-  ctx.ellipse(cx, cy, r * 0.42, r, 0, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(cx - r, cy);
-  ctx.lineTo(cx + r, cy);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(cx + r * 0.62, cy - r * 0.62, r * 0.27, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-// 底端品牌栏：左侧标志与字标，右侧小程序码（没有码图时用文字提示）
-function drawBrandFooter(ctx, y0, style, qr) {
-  const W = POSTER_W;
-  const dark = style.theme.dark;
-  const bg = dark ? '#0f1012' : '#fbfaf7';
-  const ink = dark ? '#f2f0ea' : '#161616';
-  const sub = dark ? 'rgba(242,240,234,0.6)' : 'rgba(22,22,22,0.55)';
-
-  ctx.save();
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, y0, W, FOOTER_H);
-  ctx.strokeStyle = dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)';
-  ctx.lineWidth = 0.6;
-  ctx.beginPath();
-  ctx.moveTo(0, y0 + 0.3);
-  ctx.lineTo(W, y0 + 0.3);
-  ctx.stroke();
-
-  const cy = y0 + FOOTER_H / 2;
-  ctx.textBaseline = 'alphabetic';
-
-  if (qr) {
-    // 有小程序码：标志与字标靠左两行排列，码图在右
-    drawLogoMark(ctx, 34, cy, 11, ink);
-    ctx.fillStyle = ink;
-    setFont(ctx, 14, 800, SANS);
-    drawSpacedText(ctx, 'GEOPICS', 54, cy + 1, 4, 'left');
-    ctx.fillStyle = sub;
-    setFont(ctx, 6.5, 500, SANS);
-    drawSpacedText(ctx, appConfig.brand.tagline, 54, cy + 14, 2.4, 'left');
-
-    const qs = 46;
-    const qx = W - 22 - qs;
-    const qy = y0 + (FOOTER_H - qs) / 2;
-    ctx.fillStyle = '#ffffff';
-    roundedRectPath(ctx, qx, qy, qs, qs, 4);
-    ctx.fill();
-    ctx.strokeStyle = dark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.1)';
-    roundedRectPath(ctx, qx, qy, qs, qs, 4);
-    ctx.stroke();
-    ctx.drawImage(qr, qx + 3, qy + 3, qs - 6, qs - 6);
-  } else {
-    // 无码图：单行居中  ◯ GEOPICS | MAP YOUR MOMENT
-    const markR = 9;
-    const gap = 11;
-    setFont(ctx, 13, 800, SANS);
-    const nameW = measureSpaced(ctx, 'GEOPICS', 5);
-    setFont(ctx, 6.5, 500, SANS);
-    const tagW = measureSpaced(ctx, appConfig.brand.tagline, 2.8);
-    const divider = 26;
-    const total = markR * 2 + gap + nameW + divider + tagW;
-    let x = (W - total) / 2;
-
-    drawLogoMark(ctx, x + markR, cy, markR, ink);
-    x += markR * 2 + gap;
-    ctx.fillStyle = ink;
-    setFont(ctx, 13, 800, SANS);
-    drawSpacedText(ctx, 'GEOPICS', x, cy + 4.6, 5, 'left');
-    x += nameW + divider / 2;
-    ctx.strokeStyle = dark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.22)';
-    ctx.lineWidth = 0.6;
-    ctx.beginPath();
-    ctx.moveTo(x, cy - 7);
-    ctx.lineTo(x, cy + 7);
-    ctx.stroke();
-    x += divider / 2;
-    ctx.fillStyle = sub;
-    setFont(ctx, 6.5, 500, SANS);
-    drawSpacedText(ctx, appConfig.brand.tagline, x, cy + 2.4, 2.8, 'left');
-  }
-  ctx.restore();
-}
-
-function paintEmpty(ctx) {
-  const W = POSTER_W;
-  const H = POSTER_H;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = 'rgba(60,60,67,0.12)';
-  ctx.lineWidth = 0.6;
-  ctx.strokeRect(20, 20, W - 40, H - 40);
-  ctx.fillStyle = '#1c1c1e';
-  ctx.textBaseline = 'alphabetic';
-  setFont(ctx, 30, 800, SANS);
-  drawSpacedText(ctx, 'GEOPICS', W / 2, H / 2 - 6, 5, 'center');
-  ctx.fillStyle = '#8e8e93';
-  setFont(ctx, 9, 400, SERIF, 'italic');
-  drawSpacedText(ctx, 'SELECT A PHOTO TO BEGIN', W / 2, H / 2 + 18, 2.4, 'center');
-}
-
-const PAINTERS = {
-  polaroid: paintPolaroid,
-  split: paintSplit,
-  medallion: paintMedallion,
-  magazine: paintMagazine,
-  film: paintFilm,
-  postcard: paintPostcard,
-  gallery: paintGallery,
-  glass: paintGlass,
-  typo: paintTypo,
-  mat: paintMat,
-  bar: paintBar,
-  frame: paintFrame,
-  rail: paintRail,
-  cinema: paintCinema,
-  coord: paintCoord
-};
-
-/**
- * 统一入口：在任意 2D canvas 上绘制整张海报。
- * @param canvas  Canvas 2D 节点（其 width/height 已设置为物理像素）
- * @param assets  { photo: Image, map: Image|null } 为 null 时绘制占位
- * @param style   { theme, mapAlpha, photoAlpha, textAlpha }，透明度范围 0~1
- */
-function paintPoster(canvas, tplId, assets, info, style) {
-  const ctx = canvas.getContext('2d');
-  const scale = canvas.width / POSTER_W;
-
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.setTransform(scale, 0, 0, scale, 0, 0);
-
-  if (!assets) {
-    paintEmpty(ctx);
-    if (style && style.footer) drawBrandFooter(ctx, POSTER_H, style, null);
-    return;
-  }
-  const tpl = TEMPLATES.find((t) => t.id === tplId) || TEMPLATES[0];
-  textAlpha = style.textAlpha;
-  PAINTERS[tpl.id](ctx, scale, assets, info, tpl, style);
-  textAlpha = 1;
-  if (style.watermark) drawWatermark(ctx);
-  if (style.footer) drawBrandFooter(ctx, POSTER_H, style, assets.qr || null);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1485,6 +107,25 @@ function pickRandomTemplates(count, categoryId) {
   return batchUtil.pickRandomTemplates(templatesOf(categoryId).map((t) => t.id), count);
 }
 
+// 模板 Tab 只需要 id 与名称，避免把地图参数等整份元数据塞进 setData
+function templateTabs(categoryId) {
+  return templatesOf(categoryId).map((t) => ({ id: t.id, name: t.name }));
+}
+
+// 会员档位附上单张均价，并标出均价最低的一档
+function planOffers() {
+  const plans = appConfig.membership.plans;
+  const unit = (pl) => pl.price / pl.quota;
+  const best = Math.min(...plans.map(unit));
+  return plans.map((pl) =>
+    Object.assign({}, pl, {
+      priceText: membership.formatPrice(pl.price),
+      unitText: `约 ¥${(unit(pl) / 100).toFixed(2)}/张`,
+      best: plans.length > 1 && unit(pl) === best
+    })
+  );
+}
+
 Page({
   data: {
     footerOn: true,
@@ -1498,16 +139,18 @@ Page({
     currentLocked: true,
     lockBadges: false,
     paywallVisible: false,
-    plans: appConfig.membership.plans.map((pl) => Object.assign({ priceText: membership.formatPrice(pl.price) }, pl)),
+    plans: planOffers(),
     singleOffer: Object.assign({ priceText: membership.formatPrice(appConfig.membership.single.price) }, appConfig.membership.single),
     inviteInput: '',
     inviteError: '',
     paywallNotice: '',
     packLines: [],
     mockPay: payment.isMock(),
+    canPurchase: true,
+    singlePage: false,
     categories: CATEGORIES,
     catId: HOT_CATEGORY,
-    visibleTemplates: templatesOf(HOT_CATEGORY),
+    visibleTemplates: templateTabs(HOT_CATEGORY),
     templateId: 'polaroid',
     hasPhoto: false,
     photoPath: '',
@@ -1550,10 +193,12 @@ Page({
     canvasStyle: '',
     busy: false,
     busyText: '',
-    tokenMissing: !mapService.hasToken()
+    tokenMissing: false
   },
 
   onLoad() {
+    this.canPurchase = platform.canPurchase();
+    this.singlePage = platform.isSinglePageMode();
     // 非 data 状态：与渲染无关，避免多余的 setData
     this.items = [];
     this.member = membership.load();
@@ -1584,7 +229,15 @@ Page({
     this.dpr = Math.min(win.pixelRatio || 2, 3);
     this.setData(
       Object.assign(
-        { footerOn, exportSize: exportSizeText(footerOn), canvasStyle: `width:${cssW}px;height:${cssH}px;` },
+        {
+          footerOn,
+          exportSize: exportSizeText(footerOn),
+          canvasStyle: `width:${cssW}px;height:${cssH}px;`,
+          canPurchase: this.canPurchase,
+          singlePage: this.singlePage,
+          // 只提示开发者：正式版缺少 token 时静默使用本地底图
+          tokenMissing: !mapService.hasToken() && platform.isDevBuild()
+        },
         this.pickerView(),
         this.memberView(),
         this.listView()
@@ -1598,7 +251,11 @@ Page({
   },
 
   onShow() {
-    this.syncMember();
+    return this.syncMember();
+  },
+
+  onOpenAbout() {
+    wx.navigateTo({ url: '/pages/about/about' });
   },
 
   onUnload() {
@@ -1739,12 +396,16 @@ Page({
   },
 
   memberView() {
+    const now = Date.now();
     return {
-      isMember: membership.remainingQuota(this.member) > 0,
-      freeLeft: membership.remainingQuota(this.member) > 0 ? 0 : membership.freeRemaining(this.member) + membership.singlesRemaining(this.member),
-      memberLabel: membership.label(this.member),
-      memberChip: membership.chipLabel(this.member),
-      packLines: membership.packLines(this.member, appConfig.membership.plans)
+      isMember: membership.remainingQuota(this.member, now) > 0,
+      freeLeft:
+        membership.remainingQuota(this.member, now) > 0
+          ? 0
+          : membership.freeRemaining(this.member) + membership.singlesRemaining(this.member),
+      memberLabel: membership.label(this.member, now, this.canPurchase),
+      memberChip: membership.chipLabel(this.member, now, this.canPurchase),
+      packLines: membership.packLines(this.member, appConfig.membership.plans, now)
     };
   },
 
@@ -1787,9 +448,11 @@ Page({
     membership.save(this.member);
   },
 
-  // cloud 模式下权益以服务端为准：每次回到页面时拉取，并顺带让服务端补偿入账未收到回调的订单
-  async syncMember() {
-    if (payment.isMock() || this._syncing) return;
+  // cloud 模式下权益以服务端为准：回到页面时拉取（间隔 SYNC_INTERVAL，force 时立即），
+  // 并顺带让服务端补偿入账未收到回调的订单。朋友圈单页模式不能调用云开发，跳过
+  async syncMember(force) {
+    if (payment.isMock() || this.singlePage || this._syncing) return;
+    if (!force && Date.now() - (this._syncedAt || 0) < SYNC_INTERVAL) return;
     this._syncing = true;
     try {
       this.adoptMember(await payment.fetchEntitlement());
@@ -1802,6 +465,7 @@ Page({
   // 采用服务端返回的权益快照（本地缓存仅用于下次启动时先显示）。silent 时不重绘，由调用方稍后统一刷新
   adoptMember(state, silent) {
     this.member = membership.normalize(state);
+    this._syncedAt = Date.now();
     membership.save(this.member);
     if (!silent && this.poster) this.refreshEntitlement();
   },
@@ -1894,7 +558,7 @@ Page({
   },
 
   async onBuy(e) {
-    if (this.data.busy) return;
+    if (this.data.busy || !this.canPurchase) return;
     const { kind, id } = e.currentTarget.dataset;
     let order;
     let plan = null;
@@ -1918,10 +582,11 @@ Page({
     }
     if (!result || !result.ok) return;
     if (result.pending) {
-      // 已付款但服务端尚未确认：不在本地发放权益，稍后自动同步
+      // 已付款但服务端尚未确认：不在本地发放权益，稍后自动同步；在此之前回到页面也会立即同步
       wx.showToast({ title: '支付结果确认中，稍后自动到账', icon: 'none' });
+      this._syncedAt = 0;
       clearTimeout(this._syncTimer);
-      this._syncTimer = setTimeout(() => this.syncMember(), 8000);
+      this._syncTimer = setTimeout(() => this.syncMember(true), 8000);
       return;
     }
     if (result.state) {
@@ -1983,6 +648,12 @@ Page({
     return this.chooseAndImport(true);
   },
 
+  // 空白预览上画着“添加照片”，点按即可选图；有照片时预览只响应取景手势
+  onTapPreview() {
+    if (this.data.hasPhoto || this.data.busy) return;
+    return this.onChoosePhoto();
+  },
+
   // 缩略图条末尾的 “+”：继续添加，或重新选择替换全部
   async onTapAddTile() {
     if (this.data.busy) return;
@@ -1999,6 +670,10 @@ Page({
   },
 
   async chooseAndImport(append) {
+    if (this.singlePage) {
+      wx.showToast({ title: '请点击下方「前往小程序」后使用', icon: 'none' });
+      return;
+    }
     const remain = MAX_BATCH - (append ? this.items.length : 0);
     if (remain <= 0) {
       wx.showToast({ title: `最多 ${MAX_BATCH} 张`, icon: 'none' });
@@ -2015,14 +690,21 @@ Page({
       });
       files = res.tempFiles.map((f) => f.tempFilePath);
     } catch (e) {
-      if (!isCancel(e)) wx.showToast({ title: '选择图片失败', icon: 'none' });
+      if (isCancel(e)) return;
+      console.error('choose media failed', e);
+      wx.showToast({ title: isPrivacyDenied(e) ? '需同意隐私保护指引后才能选择照片' : '选择照片失败，请重试', icon: 'none' });
       return;
     }
+    if (!files.length) return;
 
-    this.showBusy('读取并处理照片…');
+    const total = files.length;
+    const progress = (i) => (total > 1 ? `读取照片 ${i + 1}/${total}…` : '读取并处理照片…');
+    this.showBusy(progress(0));
     const baseTemplate = this.poster.templateId;
     const created = [];
-    for (const filePath of files) {
+    for (let i = 0; i < total; i += 1) {
+      const filePath = files[i];
+      if (i > 0) this.setData({ busyText: progress(i) });
       const item = this.createItem(filePath, baseTemplate);
       const exif = await exifParser.extractFromFile(filePath);
       item.autoDate = {
@@ -2048,6 +730,7 @@ Page({
     this.syncView();
     this.render();
 
+    if (mapService.hasToken() && created.some((it) => it.exif.hasGps)) this.setData({ busyText: '获取地名…' });
     await Promise.all(
       created.map((item) => {
         const exif = item.exif;
@@ -2065,7 +748,7 @@ Page({
     if (created.length === 1) {
       const modal = await wxp('showModal', {
         title: '未读取到位置',
-        content: '未读取到位置，请在地图上手动选择',
+        content: '这张照片没有定位信息（拍摄时未开启定位，或经聊天转发后被移除），可以手动选择拍摄地点。',
         confirmText: '去选择',
         cancelText: '暂不',
         confirmColor: TINT
@@ -2162,13 +845,13 @@ Page({
   ensureCategory() {
     const tpl = TEMPLATES.find((t) => t.id === this.poster.templateId);
     if (!tpl || templatesOf(this.data.catId).some((t) => t.id === tpl.id)) return;
-    this.setData({ catId: tpl.category, visibleTemplates: templatesOf(tpl.category) });
+    this.setData({ catId: tpl.category, visibleTemplates: templateTabs(tpl.category) });
   },
 
   onTapCategory(e) {
     const catId = e.currentTarget.dataset.id;
     if (catId === this.data.catId) return;
-    this.setData({ catId, visibleTemplates: templatesOf(catId) }, () => {
+    this.setData({ catId, visibleTemplates: templateTabs(catId) }, () => {
       // 随机模式的抽取范围就是当前分类
       if (this.data.batchMode === 'random' && this.items.length > 1) this.reshuffle();
     });
@@ -2226,7 +909,9 @@ Page({
     try {
       loc = await wxp('chooseLocation', {});
     } catch (e) {
-      if (!isCancel(e)) wx.showToast({ title: '无法打开地图选点', icon: 'none' });
+      if (isCancel(e)) return;
+      console.error('choose location failed', e);
+      wx.showToast({ title: isPrivacyDenied(e) ? '需同意隐私保护指引后才能地图选点' : '无法打开地图选点', icon: 'none' });
       return;
     }
     if (!loc || typeof loc.latitude !== 'number') return;
@@ -2382,6 +1067,7 @@ Page({
   onTapTemplate(e) {
     const id = e.currentTarget.dataset.id;
     if (id === this.poster.templateId) return;
+    tick();
     // 统一模板模式下作用于全部照片；随机模式下只改当前这张
     if (this.data.batchMode === 'unique') {
       this.applyTemplateToAll(id);
@@ -2751,7 +1437,15 @@ Page({
         qr = null;
       }
     }
-    return { photo, map, qr };
+    let mapLogo = null;
+    if (map) {
+      try {
+        mapLogo = await cachedImage(canvas, cache, MAPBOX_LOGO);
+      } catch (e) {
+        mapLogo = null;
+      }
+    }
+    return { photo, map, qr, mapLogo };
   },
 
   // 配色与不透明度（0~1）为全局设置；取景按条目各自保存
@@ -2775,7 +1469,10 @@ Page({
       place: item.place || 'UNKNOWN',
       coordText: item.coordText || '-- ° --  -- ° --',
       dateText: item.dateText || '',
-      seed
+      seed,
+      lat: item.lat,
+      lon: item.lon,
+      zoom: this.data.zoom
     };
   },
 
@@ -2810,6 +1507,83 @@ Page({
     if (renderId !== this._renderId) return;
     item.photoSize = { w: assets.photo.width, h: assets.photo.height };
     paintPoster(canvas, tplId, assets, this.buildInfo(item), style);
+  },
+
+  /* ---------------------------- 转发 ---------------------------- */
+
+  // 标题只使用自动识别的地名：手动输入的文字不经审核，不放进转发给他人的标题
+  shareTitle() {
+    const place = this.data.hasPhoto && !this.poster.placeManual ? (this.poster.place || '').trim() : '';
+    if (!place || place === 'UNKNOWN' || place === 'LOCATING…') return SHARE_TITLE;
+    return `「${place}」· 用 GEOPICS 做的地图海报`;
+  },
+
+  // 转发卡片按 5:4 显示，直接用 3:4 的预览会被裁掉上下：把整张预览居中放到 5:4 的底图上。
+  // 3 秒内没生成完时，微信使用不带 imageUrl 的默认内容
+  onShareAppMessage() {
+    const share = { title: this.shareTitle(), path: '/pages/index/index' };
+    const promise = this.composeShareImage()
+      .catch((e) => {
+        console.warn('compose share image failed', e);
+        return '';
+      })
+      .then((imageUrl) => (imageUrl ? Object.assign({ imageUrl }, share) : share));
+    return Object.assign({ promise }, share);
+  },
+
+  // 朋友圈只能同步返回，使用默认的小程序图标
+  onShareTimeline() {
+    return { title: this.shareTitle() };
+  },
+
+  async composeShareImage() {
+    // 导出时离屏画布正在使用
+    if (!this.preview || this.data.busy) return '';
+    let snapshot = this.data.coverImage;
+    if (!snapshot) {
+      const { width, height } = this.preview;
+      ({ tempFilePath: snapshot } = await wxp('canvasToTempFilePath', {
+        canvas: this.preview,
+        x: 0,
+        y: 0,
+        width,
+        height,
+        destWidth: width,
+        destHeight: height,
+        fileType: 'jpg',
+        quality: 0.92
+      }));
+    }
+    const canvas = await this.queryCanvas('#exportCanvas');
+    canvas.width = SHARE_W;
+    canvas.height = SHARE_H;
+    const ctx = canvas.getContext('2d');
+    const img = await loadImage(canvas, snapshot);
+    ctx.fillStyle = '#F2F2F7';
+    ctx.fillRect(0, 0, SHARE_W, SHARE_H);
+    const h = SHARE_H - SHARE_PAD * 2;
+    const w = Math.round((h * img.width) / img.height);
+    const x = Math.round((SHARE_W - w) / 2);
+    ctx.save();
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.16)';
+    ctx.shadowBlur = 32;
+    ctx.shadowOffsetY = 10;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(x, SHARE_PAD, w, h);
+    ctx.restore();
+    ctx.drawImage(img, x, SHARE_PAD, w, h);
+    const { tempFilePath } = await wxp('canvasToTempFilePath', {
+      canvas,
+      x: 0,
+      y: 0,
+      width: SHARE_W,
+      height: SHARE_H,
+      destWidth: SHARE_W,
+      destHeight: SHARE_H,
+      fileType: 'jpg',
+      quality: 0.9
+    });
+    return tempFilePath;
   },
 
   /* ---------------------------- 导出 ---------------------------- */
@@ -2847,27 +1621,29 @@ Page({
     if (this.data.busy || !items.length) return;
     const { allowed, blocked } = this.splitByEntitlement(items);
     const bought = this.member.bought;
+    const buy = this.canPurchase;
     const freeTotal = appConfig.membership.freeQuota;
-    const exhausted = bought
-      ? '额度已用完或已到期，购买额外的月度或年度会员即可继续下载。'
-      : `${freeTotal} 张免费额度已用完，开通会员即可继续下载。`;
+    const upsell = !buy ? '' : bought ? '购买额外的月度或年度会员即可继续下载。' : '开通会员即可继续下载。';
+    const exhausted = (bought ? '额度已用完或已到期。' : `${freeTotal} 张免费额度已用完。`) + upsell;
     if (!allowed.length) {
       await this.openPaywall(resume, exhausted);
       return;
     }
     if (blocked.length) {
-      const notice = bought
-        ? `本次需下载 ${items.length} 张，剩余额度只够 ${allowed.length} 张。购买额外的月度或年度会员可继续下载其余 ${blocked.length} 张。`
-        : `免费额度只够 ${allowed.length} 张，其余 ${blocked.length} 张带水印，无法下载。开通会员可继续下载。`;
+      let notice = bought
+        ? `本次需下载 ${items.length} 张，剩余额度只够 ${allowed.length} 张。`
+        : `免费额度只够 ${allowed.length} 张，其余 ${blocked.length} 张带水印，无法下载。`;
+      if (buy) notice += bought ? `购买额外的月度或年度会员可继续下载其余 ${blocked.length} 张。` : '开通会员可继续下载。';
+      // 按钮文字最多 4 个字符，超出时 showModal 直接失败，张数只能放在正文里
       const res = await wxp('showModal', {
         title: bought ? '会员额度不足' : '部分照片未解锁',
         content: `${notice}\n是否仅下载可下载的 ${allowed.length} 张？`,
-        confirmText: `仅下载 ${allowed.length} 张`,
-        cancelText: bought ? '购买额外会员' : '去解锁',
+        confirmText: '仅下载',
+        cancelText: buy ? (bought ? '购买会员' : '去解锁') : '取消',
         confirmColor: TINT
       }).catch(() => ({ confirm: false }));
       if (!res.confirm) {
-        await this.openPaywall(resume, notice);
+        if (buy) await this.openPaywall(resume, notice);
         return;
       }
     }
@@ -2904,52 +1680,79 @@ Page({
     return this.data.selectedCount === this.items.length ? this.onSaveAll() : this.onSaveSelected();
   },
 
-  // 逐张导出并保存到相册；相册权限被拒绝时立即终止，其余失败计入统计
+  // 逐张导出并保存到相册。额度不足、扣额度时网络异常、未同意隐私指引、相册权限被拒绝时立即终止，
+  // 其余失败计入统计
   async saveItems(items) {
     if (this.data.busy || !items.length) return;
     const total = items.length;
     let ok = 0;
     let fail = 0;
-    let denied = false;
-    let short = false;
+    let stop = '';
     const upfront = !payment.isMock();
-    this.showBusy(total > 1 ? `导出 1/${total}…` : '生成高清海报…');
+    const progress = (i) => (total > 1 ? `导出 ${i + 1}/${total}…` : '生成高清海报…');
+    this.showBusy(progress(0));
+    if (total > 1) keepScreenOn(true);
 
-    for (let i = 0; i < total; i += 1) {
-      if (total > 1) this.setData({ busyText: `导出 ${i + 1}/${total}…` });
+    for (let i = 0; i < total && !stop; i += 1) {
+      if (i > 0) this.setData({ busyText: progress(i) });
+      if (upfront) {
+        try {
+          await this.chargeItem(items[i]);
+        } catch (e) {
+          if (!(e && e.code === 'insufficient')) console.error('charge failed', e);
+          stop = e && e.code === 'insufficient' ? 'short' : 'offline';
+          break;
+        }
+      }
       try {
-        if (upfront) await this.chargeItem(items[i]);
         const filePath = await this.exportItem(items[i]);
         await wxp('saveImageToPhotosAlbum', { filePath });
         ok += 1;
         if (!upfront) await this.chargeItem(items[i]);
       } catch (e) {
-        if (e && e.code === 'insufficient') {
-          short = true;
-          break;
+        if (isCancel(e)) stop = 'cancel';
+        else if (isPrivacyDenied(e)) stop = 'privacy';
+        else if (/auth/i.test((e && e.errMsg) || '')) stop = 'denied';
+        else {
+          console.error('export failed', e);
+          fail += 1;
         }
-        if (isCancel(e)) {
-          break;
-        }
-        if (/auth/i.test(e.errMsg || '')) {
-          denied = true;
-          break;
-        }
-        console.error('export failed', e);
-        fail += 1;
       }
     }
+    if (total > 1) keepScreenOn(false);
     this.hideBusy();
+    const short = stop === 'short';
     if (ok || short) this.refreshEntitlement();
     if (short) {
       // 服务端认定额度不足（本地快照过期或被篡改）：购买 / 兑换成功后继续下载没保存的照片
       const rest = items.filter((it) => !it.unlocked);
       const resume = () => this.requestSave(rest, resume);
-      await this.openPaywall(resume, ok ? `已保存 ${ok} 张，剩余额度不足，购买会员后可继续下载其余照片。` : '额度不足，购买会员后即可继续下载。');
+      const saved = ok ? `已保存 ${ok} 张，剩余额度不足` : '额度不足';
+      const upsell = !this.canPurchase ? '。' : ok ? '，购买会员后可继续下载其余照片。' : '，购买会员后即可继续下载。';
+      await this.openPaywall(resume, saved + upsell);
       return;
     }
 
-    if (denied) {
+    const saved = ok ? `已保存 ${ok} 张。` : '';
+    if (stop === 'offline') {
+      wxp('showModal', {
+        title: '网络异常',
+        content: `${saved}暂时无法连接服务器校验额度，${ok ? '其余照片未保存，' : ''}请检查网络后重试。`,
+        showCancel: false,
+        confirmColor: TINT
+      }).catch(() => {});
+      return;
+    }
+    if (stop === 'privacy') {
+      wxp('showModal', {
+        title: '无法保存到相册',
+        content: `${saved}需同意《隐私保护指引》后才能保存到相册，请重试并在弹窗中选择同意。`,
+        showCancel: false,
+        confirmColor: TINT
+      }).catch(() => {});
+      return;
+    }
+    if (stop === 'denied') {
       const res = await wxp('showModal', {
         title: '需要相册权限',
         content: ok ? `已保存 ${ok} 张，请在设置中允许保存到相册后继续` : '请在设置中允许保存到相册后重试',

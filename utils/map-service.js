@@ -58,6 +58,8 @@ function centerForPinAt(lat, lon, zoom, width, height, fx, fy) {
  * dark=true 时使用 darkStyleId。
  * 与固定居中的模板不同，这里允许通过 pin={x,y} 指定定位针在图中的比例位置，
  * 此时中心点会被平移，pin 覆盖层仍使用真实经纬度。
+ * 自带的标志与署名角标会随模板裁切被遮挡，因此关闭（attribution / logo=false），
+ * 改由海报在固定位置绘制 Mapbox 标志与“© Mapbox © OpenStreetMap”（见 poster/core.js drawMapCredit）。
  *
  * @returns {string} 未配置 token 时返回空字符串
  */
@@ -75,7 +77,7 @@ function buildStaticMapUrl(opts) {
 
   return (
     `https://api.mapbox.com/styles/v1/${username}/${styleId}/static/${marker}/${view}/` +
-    `${width}x${height}${retina ? '@2x' : ''}?access_token=${token}`
+    `${width}x${height}${retina ? '@2x' : ''}?attribution=false&logo=false&access_token=${token}`
   );
 }
 

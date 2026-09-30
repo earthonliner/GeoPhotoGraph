@@ -165,26 +165,28 @@ function formatDate(ms) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-// 展示在标题栏的短文案
-function label(state, now) {
+// 付费面板顶部的状态文案。purchasable 为 false（当前平台不提供购买）时不带购买引导
+function label(state, now, purchasable = true) {
   if (state.invite) return '会员 · 邀请码';
   if (remainingQuota(state, now) > 0) return `会员 · 剩余 ${availableQuota(state, now)} 张`;
-  if (state.bought) return '额度已用完 · 续购';
+  const cta = (text) => (purchasable ? ` · ${text}` : '');
+  if (state.bought) return `额度已用完${cta('续购')}`;
   const free = freeRemaining(state);
   const singles = singlesRemaining(state);
-  if (free + singles > 0) return `${singles > 0 ? '剩余' : '免费额度剩余'} ${free + singles} 张 · 开通会员`;
-  return '免费额度已用完 · 开通会员';
+  if (free + singles > 0) return `${singles > 0 ? '剩余' : '免费额度剩余'} ${free + singles} 张${cta('开通会员')}`;
+  return `免费额度已用完${cta('开通会员')}`;
 }
 
 // 大标题旁胶囊按钮上的短文案
-function chipLabel(state, now) {
+function chipLabel(state, now, purchasable = true) {
   if (state.invite) return '会员';
   if (remainingQuota(state, now) > 0) return `会员 · ${availableQuota(state, now)} 张`;
-  if (state.bought) return '续购会员';
+  if (state.bought) return purchasable ? '续购会员' : '额度已用完';
   const free = freeRemaining(state);
   const singles = singlesRemaining(state);
   if (singles > 0) return `剩余 ${free + singles} 张`;
-  return free > 0 ? `免费 · ${free} 张` : '开通会员';
+  if (free > 0) return `免费 · ${free} 张`;
+  return purchasable ? '开通会员' : '额度已用完';
 }
 
 // 付费面板中的额度明细

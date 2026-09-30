@@ -1,0 +1,76 @@
+<view class="page">
+  <view class="hero">
+    <view class="hero-icon">
+      <image class="hero-logo" src="/assets/logo.png" mode="aspectFit" />
+    </view>
+    <text class="hero-name">GEOPICS</text>
+    <text class="hero-sub">把照片与它发生的地方，做成一张海报</text>
+    <text wx:if="{{version}}" class="hero-version">{{version}}</text>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">使用方法</text>
+    </view>
+    <view class="group">
+      <view wx:for="{{steps}}" wx:key="title" class="cell step {{index > 0 ? 'cell-line cell-line-indent' : ''}}">
+        <text class="step-num">{{index + 1}}</text>
+        <view class="cell-main">
+          <text class="note-title">{{item.title}}</text>
+          <text class="note-text">{{item.text}}</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">常见问题</text>
+    </view>
+    <view class="group">
+      <view wx:for="{{faqs}}" wx:key="q" class="faq {{index > 0 ? 'cell-line' : ''}}">
+        <view class="cell faq-q" hover-class="cell-hover" data-index="{{index}}" bindtap="onToggleFaq">
+          <text class="row-label">{{item.q}}</text>
+          <view class="chevron {{item.open ? 'chevron-up' : 'chevron-down'}}"></view>
+        </view>
+        <text wx:if="{{item.open}}" class="faq-a">{{item.a}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">隐私</text>
+    </view>
+    <view class="group">
+      <view wx:for="{{privacy}}" wx:key="title" class="cell {{index > 0 ? 'cell-line' : ''}}">
+        <view class="cell-main">
+          <text class="note-title">{{item.title}}</text>
+          <text class="note-text">{{item.text}}</text>
+        </view>
+      </view>
+      <view wx:if="{{privacyContract}}" class="cell cell-line" hover-class="cell-hover" bindtap="onOpenPrivacyContract">
+        <text class="row-label">隐私保护指引</text>
+        <view class="chevron"></view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">联系我们</text>
+    </view>
+    <view class="group">
+      <button class="cell cell-btn" open-type="contact" hover-class="cell-hover">
+        <text class="row-label">联系客服</text>
+        <view class="chevron"></view>
+      </button>
+      <button class="cell cell-btn cell-line" open-type="feedback" hover-class="cell-hover">
+        <text class="row-label">意见反馈</text>
+        <view class="chevron"></view>
+      </button>
+    </view>
+  </view>
+
+  <text class="credits">地图数据 © Mapbox © OpenStreetMap</text>
+</view>

@@ -1,4 +1,4 @@
-// 运行：node --test tests/
+// 运行：node --test tests/*.test.js
 const test = require('node:test');
 const assert = require('node:assert');
 
@@ -93,7 +93,7 @@ test('static map url', () => {
   const url = mapService.buildStaticMapUrl({ lat: 46.0192, lon: 7.7459, zoom: 12, width: 600, height: 800 });
   assert.strictEqual(
     url,
-    'https://api.mapbox.com/styles/v1/mapbox/light-v11/static/pin-s+000(7.745900,46.019200)/7.745900,46.019200,12,0/600x800@2x?access_token=pk.test'
+    'https://api.mapbox.com/styles/v1/mapbox/light-v11/static/pin-s+000(7.745900,46.019200)/7.745900,46.019200,12,0/600x800@2x?attribution=false&logo=false&access_token=pk.test'
   );
 });
 
