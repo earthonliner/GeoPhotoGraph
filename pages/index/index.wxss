@@ -97,6 +97,13 @@
   display: block;
 }
 
+.poster-cover {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+}
+
 .busy {
   position: absolute;
   left: 0;
