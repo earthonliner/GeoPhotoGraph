@@ -1341,19 +1341,21 @@ function drawBrandFooter(ctx, y0, style, qr) {
   ctx.stroke();
 
   const cy = y0 + FOOTER_H / 2;
-  drawLogoMark(ctx, 34, cy, 11, ink);
   ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = ink;
-  setFont(ctx, 14, 800, SANS);
-  drawSpacedText(ctx, 'GEOPICS', 54, cy + 1, 4, 'left');
-  ctx.fillStyle = sub;
-  setFont(ctx, 6.5, 500, SANS);
-  drawSpacedText(ctx, appConfig.brand.tagline, 54, cy + 14, 2.4, 'left');
 
-  const qs = 46;
-  const qx = W - 22 - qs;
-  const qy = y0 + (FOOTER_H - qs) / 2;
   if (qr) {
+    // 有小程序码：标志与字标靠左两行排列，码图在右
+    drawLogoMark(ctx, 34, cy, 11, ink);
+    ctx.fillStyle = ink;
+    setFont(ctx, 14, 800, SANS);
+    drawSpacedText(ctx, 'GEOPICS', 54, cy + 1, 4, 'left');
+    ctx.fillStyle = sub;
+    setFont(ctx, 6.5, 500, SANS);
+    drawSpacedText(ctx, appConfig.brand.tagline, 54, cy + 14, 2.4, 'left');
+
+    const qs = 46;
+    const qx = W - 22 - qs;
+    const qy = y0 + (FOOTER_H - qs) / 2;
     ctx.fillStyle = '#ffffff';
     roundedRectPath(ctx, qx, qy, qs, qs, 4);
     ctx.fill();
@@ -1362,12 +1364,33 @@ function drawBrandFooter(ctx, y0, style, qr) {
     ctx.stroke();
     ctx.drawImage(qr, qx + 3, qy + 3, qs - 6, qs - 6);
   } else {
-    ctx.fillStyle = sub;
-    setFont(ctx, 8, 500, SANS);
-    drawSpacedText(ctx, '微信搜索小程序', W - 22, cy - 3, 1.2, 'right');
+    // 无码图：单行居中  ◯ GEOPICS | MAP YOUR MOMENT
+    const markR = 9;
+    const gap = 11;
+    setFont(ctx, 13, 800, SANS);
+    const nameW = measureSpaced(ctx, 'GEOPICS', 5);
+    setFont(ctx, 6.5, 500, SANS);
+    const tagW = measureSpaced(ctx, appConfig.brand.tagline, 2.8);
+    const divider = 26;
+    const total = markR * 2 + gap + nameW + divider + tagW;
+    let x = (W - total) / 2;
+
+    drawLogoMark(ctx, x + markR, cy, markR, ink);
+    x += markR * 2 + gap;
     ctx.fillStyle = ink;
-    setFont(ctx, 12, 800, SANS);
-    drawSpacedText(ctx, appConfig.brand.searchName, W - 22, cy + 14, 1.6, 'right');
+    setFont(ctx, 13, 800, SANS);
+    drawSpacedText(ctx, 'GEOPICS', x, cy + 4.6, 5, 'left');
+    x += nameW + divider / 2;
+    ctx.strokeStyle = dark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.22)';
+    ctx.lineWidth = 0.6;
+    ctx.beginPath();
+    ctx.moveTo(x, cy - 7);
+    ctx.lineTo(x, cy + 7);
+    ctx.stroke();
+    x += divider / 2;
+    ctx.fillStyle = sub;
+    setFont(ctx, 6.5, 500, SANS);
+    drawSpacedText(ctx, appConfig.brand.tagline, x, cy + 2.4, 2.8, 'left');
   }
   ctx.restore();
 }
