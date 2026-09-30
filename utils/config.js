@@ -58,7 +58,7 @@ module.exports = {
     //          小程序端只保存服务端返回的权益快照。部署步骤见 README「接入微信支付」
     mode: 'cloud',
     // env：云开发环境 ID；api：云函数名
-    cloud: { env: '', api: 'api' },
+    cloud: { env: 'cloud1-d0gjjjk1y3ed016f0', api: 'api' },
     // 支付完成后向服务端确认到账的次数与间隔（回调可能稍有延迟）
     confirm: { tries: 6, delayMs: 1000 }
   }
