@@ -13,6 +13,7 @@ const MAX_CROP_ZOOM = 4;
 
 const SANS = '"Helvetica Neue", Helvetica, Arial, "PingFang SC", "Microsoft YaHei", sans-serif';
 const SERIF = 'Georgia, "Times New Roman", "Songti SC", serif';
+const MONO = 'Menlo, "Courier New", Courier, monospace';
 const TAGLINE = 'CAPTURED MOMENT · LASTING PLACE';
 
 /**
@@ -388,6 +389,122 @@ function splitCoord(info) {
   return { lat: parts[0] || '', lon: parts[1] || '' };
 }
 
+const MONTH_INDEX = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
+
+// "JUN 16, 2024" -> { y: 2024, m: 6, d: 16 }；没有日期时为 null
+function dateParts(dateText) {
+  const m = /^([A-Z]{3}) (\d{1,2}), (\d{4})$/.exec(dateText || '');
+  if (!m || !MONTH_INDEX[m[1]]) return null;
+  return { y: Number(m[3]), m: MONTH_INDEX[m[1]], d: Number(m[2]) };
+}
+
+const pad2 = (n) => String(n).padStart(2, '0');
+
+const CN_DIGITS = '〇一二三四五六七八九';
+function chineseNumber(n) {
+  if (n < 10) return CN_DIGITS[n];
+  const tens = Math.floor(n / 10);
+  return `${tens > 1 ? CN_DIGITS[tens] : ''}十${n % 10 ? CN_DIGITS[n % 10] : ''}`;
+}
+
+// { y: 2024, m: 6, d: 16 } -> 二〇二四年六月十六日
+function chineseDate(parts) {
+  const year = Array.from(String(parts.y), (c) => CN_DIGITS[Number(c)]).join('');
+  return `${year}年${chineseNumber(parts.m)}月${chineseNumber(parts.d)}日`;
+}
+
+/**
+ * 沿圆弧逐字排布，文字以 angle（弧度，0 为正右方、-π/2 为正上方）为中点。
+ * 上半圆字头朝外、顺时针阅读；bottom=true 时用于下半圆，字头朝圆心、仍从左往右阅读。
+ * r 为基线半径：下半圆的字向圆心方向生长，想与上半圆占同一圈时 r 应大出约一个字高。
+ */
+function drawArcText(ctx, text, cx, cy, r, angle, spacing, bottom) {
+  const chars = Array.from(text);
+  const widths = chars.map((ch) => ctx.measureText(ch).width);
+  const total = widths.reduce((s, w) => s + w, 0) + spacing * Math.max(0, chars.length - 1);
+  const dir = bottom ? -1 : 1;
+  let a = angle - (dir * total) / 2 / r;
+  const prevAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = prevAlpha * textAlpha;
+  ctx.textAlign = 'center';
+  chars.forEach((ch, i) => {
+    const half = widths[i] / 2 / r;
+    a += dir * half;
+    ctx.save();
+    ctx.translate(cx + r * Math.cos(a), cy + r * Math.sin(a));
+    ctx.rotate(a + (dir * Math.PI) / 2);
+    ctx.fillText(ch, 0, 0);
+    ctx.restore();
+    a += dir * (half + spacing / r);
+  });
+  ctx.textAlign = 'left';
+  ctx.globalAlpha = prevAlpha;
+}
+
+// 竖排（每行一个字），y 为首字基线；空白字符不占位
+function drawVerticalText(ctx, text, x, y, step) {
+  const prevAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = prevAlpha * textAlpha;
+  ctx.textAlign = 'center';
+  Array.from(text)
+    .filter((ch) => ch.trim())
+    .forEach((ch, i) => ctx.fillText(ch, x, y + i * step));
+  ctx.textAlign = 'left';
+  ctx.globalAlpha = prevAlpha;
+}
+
+// 装饰用条形码：条宽 / 间距由种子决定，同一地点每次一致
+function drawBarcode(ctx, x, y, w, h, seed, color) {
+  const rand = mulberry32(seed);
+  const bars = [0.8, 1.2, 1.6, 2.4];
+  const gaps = [0.8, 1.2, 1.8];
+  ctx.fillStyle = color;
+  let cx = x;
+  while (cx < x + w) {
+    const bw = bars[Math.floor(rand() * bars.length)];
+    if (cx + bw > x + w) break;
+    ctx.fillRect(cx, y, bw, h);
+    cx += bw + gaps[Math.floor(rand() * gaps.length)];
+  }
+}
+
+/**
+ * 邮票齿孔轮廓：四边向内咬出半圆，填充后齿孔处透出下层内容（照片 / 地图）。
+ * 每边齿孔数取整，保证四角对称。
+ */
+function perforatedPath(ctx, x, y, w, h, r, step) {
+  const nx = Math.max(1, Math.round(w / step));
+  const ny = Math.max(1, Math.round(h / step));
+  const sx = w / nx;
+  const sy = h / ny;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  for (let i = 0; i < nx; i++) {
+    const cx = x + sx * (i + 0.5);
+    ctx.lineTo(cx - r, y);
+    ctx.arc(cx, y, r, Math.PI, 0, true);
+  }
+  ctx.lineTo(x + w, y);
+  for (let j = 0; j < ny; j++) {
+    const cy = y + sy * (j + 0.5);
+    ctx.lineTo(x + w, cy - r);
+    ctx.arc(x + w, cy, r, -Math.PI / 2, Math.PI / 2, true);
+  }
+  ctx.lineTo(x + w, y + h);
+  for (let i = nx - 1; i >= 0; i--) {
+    const cx = x + sx * (i + 0.5);
+    ctx.lineTo(cx + r, y + h);
+    ctx.arc(cx, y + h, r, 0, Math.PI, true);
+  }
+  ctx.lineTo(x, y + h);
+  for (let j = ny - 1; j >= 0; j--) {
+    const cy = y + sy * (j + 0.5);
+    ctx.lineTo(x, cy + r);
+    ctx.arc(x, cy, r, Math.PI / 2, -Math.PI / 2, true);
+  }
+  ctx.closePath();
+}
+
 // Mapbox 要求静态 / 印刷地图附带其标志与文字署名。静态图自带的角标会随各模板的裁切被遮挡或截断，
 // 因此请求时关闭，改由模板在固定位置绘制；署名不受文字不透明度影响，离线简约底图不需要署名
 const CREDIT_TEXT = '© Mapbox © OpenStreetMap';
@@ -451,6 +568,7 @@ module.exports = {
   MAX_CROP_ZOOM,
   SANS,
   SERIF,
+  MONO,
   TAGLINE,
   MAP_SIZE,
   CENTER_PIN,
@@ -474,6 +592,13 @@ module.exports = {
   photoText,
   drawFullBleedPhoto,
   splitCoord,
+  dateParts,
+  pad2,
+  chineseDate,
+  drawArcText,
+  drawVerticalText,
+  drawBarcode,
+  perforatedPath,
   drawMapCredit,
   drawPerforatedStamp,
   setTextAlpha

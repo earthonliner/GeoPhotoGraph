@@ -1,10 +1,11 @@
-// 简约模板（适合批量）：白卡 / 底栏 / 细框 / 侧栏 / 影幕 / 坐标。
+// 简约模板（适合批量）：白卡 / 底栏 / 细框 / 侧栏 / 影幕 / 坐标 / 拱窗。
 // 版式固定、文字量少，照片方向与地名长短不同也能保持整批统一
 const { hexToRgba } = require('../themes.js');
 const {
   POSTER_W,
   POSTER_H,
   SANS,
+  SERIF,
   setFont,
   measureSpaced,
   drawSpacedText,
@@ -27,6 +28,7 @@ const BAR_PHOTO = { left: 0, top: 0, w: POSTER_W, h: POSTER_H - BAR_H };
 const RAIL_W = 64;
 const RAIL_PHOTO = { left: 0, top: 0, w: POSTER_W - RAIL_W, h: POSTER_H };
 const CINEMA_PHOTO = { left: 0, top: 116, w: POSTER_W, h: 260 };
+const ARCH_PHOTO = { left: 64, top: 64, w: 272, h: 344 };
 
 // 极简白卡：宽边留白，照片下方一行细字说明
 function paintMat(ctx, scale, assets, info, tpl, style) {
@@ -237,6 +239,62 @@ function paintCoord(ctx, scale, assets, info, tpl, style) {
   drawSpacedText(ctx, lon, m + 10, H - m - 34, 2, 'left');
 }
 
+// 拱形轮廓（顶部半圆，底边开口或闭合）
+function archPath(ctx, x, y, w, h, closed) {
+  const r = w / 2;
+  ctx.beginPath();
+  ctx.moveTo(x, y + h);
+  ctx.lineTo(x, y + r);
+  ctx.arc(x + r, y + r, r, Math.PI, 0);
+  ctx.lineTo(x + w, y + h);
+  if (closed) ctx.closePath();
+}
+
+// 拱窗：照片裁成拱门形，外圈同心细线与地平线，衬线地名居中
+function paintArch(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const ink = style.theme.ink;
+  const p = ARCH_PHOTO;
+  const bottom = p.top + p.h;
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  ctx.save();
+  archPath(ctx, p.left, p.top, p.w, p.h, true);
+  ctx.clip();
+  withAlpha(ctx, style.photoAlpha, () => {
+    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
+  });
+  ctx.restore();
+
+  const o = 9;
+  ctx.strokeStyle = hexToRgba(ink, 0.5);
+  ctx.lineWidth = 0.7;
+  archPath(ctx, p.left - o, p.top - o, p.w + o * 2, p.h + o);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(p.left - o - 18, bottom);
+  ctx.lineTo(p.left + p.w + o + 18, bottom);
+  ctx.stroke();
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = ink;
+  fitFontSize(ctx, info.place, W - 80, 26, 12, 400, SERIF, 6);
+  drawSpacedText(ctx, info.place, W / 2, bottom + 52, 6, 'center');
+
+  ctx.strokeStyle = hexToRgba(ink, 0.45);
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(W / 2 - 12, bottom + 68);
+  ctx.lineTo(W / 2 + 12, bottom + 68);
+  ctx.stroke();
+
+  ctx.fillStyle = hexToRgba(ink, 0.65);
+  setFont(ctx, 7.5, 500, SANS);
+  const meta = [info.coordText, info.dateText].filter(Boolean).join('   ·   ');
+  drawSpacedText(ctx, meta, W / 2, bottom + 88, 1.4, 'center');
+}
+
 module.exports = {
   painters: {
     mat: paintMat,
@@ -244,7 +302,8 @@ module.exports = {
     frame: paintFrame,
     rail: paintRail,
     cinema: paintCinema,
-    coord: paintCoord
+    coord: paintCoord,
+    arch: paintArch
   },
   crops: {
     mat: MAT_PHOTO,
@@ -252,6 +311,7 @@ module.exports = {
     frame: FULL_PHOTO,
     rail: RAIL_PHOTO,
     cinema: CINEMA_PHOTO,
-    coord: FULL_PHOTO
+    coord: FULL_PHOTO,
+    arch: ARCH_PHOTO
   }
 };

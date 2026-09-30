@@ -85,6 +85,11 @@ function pickRandomTemplates(count, categoryId) {
   return batchUtil.pickRandomTemplates(templatesOf(categoryId).map((t) => t.id), count);
 }
 
+// 模板 Tab 只需要 id 与名称，避免把地图参数等整份元数据塞进 setData
+function templateTabs(categoryId) {
+  return templatesOf(categoryId).map((t) => ({ id: t.id, name: t.name }));
+}
+
 Page({
   data: {
     footerOn: true,
@@ -107,7 +112,7 @@ Page({
     mockPay: payment.isMock(),
     categories: CATEGORIES,
     catId: HOT_CATEGORY,
-    visibleTemplates: templatesOf(HOT_CATEGORY),
+    visibleTemplates: templateTabs(HOT_CATEGORY),
     templateId: 'polaroid',
     hasPhoto: false,
     photoPath: '',
@@ -762,13 +767,13 @@ Page({
   ensureCategory() {
     const tpl = TEMPLATES.find((t) => t.id === this.poster.templateId);
     if (!tpl || templatesOf(this.data.catId).some((t) => t.id === tpl.id)) return;
-    this.setData({ catId: tpl.category, visibleTemplates: templatesOf(tpl.category) });
+    this.setData({ catId: tpl.category, visibleTemplates: templateTabs(tpl.category) });
   },
 
   onTapCategory(e) {
     const catId = e.currentTarget.dataset.id;
     if (catId === this.data.catId) return;
-    this.setData({ catId, visibleTemplates: templatesOf(catId) }, () => {
+    this.setData({ catId, visibleTemplates: templateTabs(catId) }, () => {
       // 随机模式的抽取范围就是当前分类
       if (this.data.batchMode === 'random' && this.items.length > 1) this.reshuffle();
     });
@@ -1383,7 +1388,10 @@ Page({
       place: item.place || 'UNKNOWN',
       coordText: item.coordText || '-- ° --  -- ° --',
       dateText: item.dateText || '',
-      seed
+      seed,
+      lat: item.lat,
+      lon: item.lon,
+      zoom: this.data.zoom
     };
   },
 
