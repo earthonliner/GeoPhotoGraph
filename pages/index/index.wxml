@@ -27,7 +27,10 @@
           <view class="seg-item {{placeLang === 'en' ? 'seg-active' : ''}}" data-lang="en" bindtap="onPlaceLangChange">English</view>
           <view class="seg-item {{placeLang === 'zh' ? 'seg-active' : ''}}" data-lang="zh" bindtap="onPlaceLangChange">中文</view>
         </view>
-        <text wx:if="{{placeManual}}" class="link" bindtap="onPlaceReset">恢复自动地名</text>
+        <view class="link-group">
+          <text wx:if="{{itemCount > 1}}" class="link" bindtap="onApplyPlaceToAll">地名应用到全部</text>
+          <text wx:if="{{placeManual}}" class="link" bindtap="onPlaceReset">恢复自动地名</text>
+        </view>
       </view>
       <view class="meta-row">
         <text class="meta-label">COORD</text>
@@ -42,9 +45,12 @@
           </view>
         </view>
       </picker>
-      <view wx:if="{{dateManual}}" class="place-tools">
+      <view wx:if="{{dateManual || itemCount > 1}}" class="place-tools">
         <text></text>
-        <text class="link" bindtap="onDateReset">恢复拍摄日期</text>
+        <view class="link-group">
+          <text wx:if="{{itemCount > 1}}" class="link" bindtap="onApplyDateToAll">日期应用到全部</text>
+          <text wx:if="{{dateManual}}" class="link" bindtap="onDateReset">恢复拍摄日期</text>
+        </view>
       </view>
       <button class="btn btn-ghost" hover-class="btn-hover" bindtap="onPickLocation">
         {{hasLocation ? '修改位置' : '手动选择位置'}}

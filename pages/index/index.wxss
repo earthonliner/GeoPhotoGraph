@@ -615,3 +615,8 @@
 .btn-half[disabled] {
   opacity: 0.5;
 }
+
+.link-group {
+  display: flex;
+  gap: 32rpx;
+}

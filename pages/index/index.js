@@ -1522,6 +1522,23 @@ Page({
     this._placeTimer = setTimeout(() => this.render(), 200);
   },
 
+  // 把当前照片的地名统一应用到所有照片（坐标各自保留，并作废尚未返回的自动地名解析）
+  onApplyPlaceToAll() {
+    const text = (this.poster.place || '').trim();
+    if (!text || text === 'LOCATING…') {
+      wx.showToast({ title: '请先填写地名', icon: 'none' });
+      return;
+    }
+    this.items.forEach((it) => {
+      it.locId += 1;
+      it.place = text;
+      it.placeManual = true;
+    });
+    this.syncView();
+    this.render();
+    wx.showToast({ title: `地名已应用到 ${this.items.length} 张`, icon: 'none' });
+  },
+
   onPlaceReset() {
     const item = this.poster;
     if (item.lat !== null) {
@@ -1779,6 +1796,20 @@ Page({
     if (!text) return;
     Object.assign(this.poster, { dateText: text, dateValue: value, dateManual: true });
     this.touch(this.poster, true);
+  },
+
+  onApplyDateToAll() {
+    const { dateText, dateValue } = this.poster;
+    if (!dateText) {
+      wx.showToast({ title: '请先选择日期', icon: 'none' });
+      return;
+    }
+    this.items.forEach((it) => {
+      Object.assign(it, { dateText, dateValue, dateManual: true });
+    });
+    this.syncView();
+    this.render();
+    wx.showToast({ title: `日期已应用到 ${this.items.length} 张`, icon: 'none' });
   },
 
   onDateReset() {
