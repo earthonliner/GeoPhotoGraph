@@ -54,15 +54,16 @@
     <view wx:else class="hint">请选择带定位信息的原图（相册），将自动读取拍摄地点与日期</view>
   </view>
 
-  <view class="tabs">
+  <scroll-view scroll-x enable-flex class="tabs" scroll-with-animation scroll-into-view="tab-{{templateId}}">
     <view
       wx:for="{{templates}}"
       wx:key="id"
+      id="tab-{{item.id}}"
       class="tab {{item.id === templateId ? 'tab-active' : ''}}"
       data-id="{{item.id}}"
       bindtap="onTapTemplate"
     >{{item.name}}</view>
-  </view>
+  </scroll-view>
 
   <view class="preview">
     <canvas

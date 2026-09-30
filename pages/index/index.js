@@ -16,10 +16,20 @@ const POSTER_H = (POSTER_W * 4) / 3;
 const EXPORT_SCALE = 3;
 const MAX_CROP_ZOOM = 4;
 
-// 支持取景调整（拖动 / 缩放）的模板及其照片区域（逻辑单位）
+// 各模板中照片的取景区域（逻辑单位）；胶片 / 明信片的照片框固定，其余为整版或下半版
+const FILM_PHOTO = { left: 68, top: 50, w: 264, h: 368 };
+const POSTCARD_PHOTO = { left: 40, top: 46, w: 320, h: 236 };
+const FULL_PHOTO = { left: 0, top: 0, w: POSTER_W, h: POSTER_H };
+
+// 支持取景调整（拖动 / 缩放）的模板；拍立得与画廊展签完整显示照片，不需要裁切
 const CROP_REGIONS = {
-  split: { top: POSTER_H * 0.4, w: POSTER_W, h: POSTER_H * 0.6 },
-  medallion: { top: 0, w: POSTER_W, h: POSTER_H }
+  split: { left: 0, top: POSTER_H * 0.4, w: POSTER_W, h: POSTER_H * 0.6 },
+  medallion: FULL_PHOTO,
+  magazine: FULL_PHOTO,
+  film: FILM_PHOTO,
+  postcard: POSTCARD_PHOTO,
+  glass: FULL_PHOTO,
+  typo: FULL_PHOTO
 };
 const DEFAULT_CROP = { zoom: 1, x: 0, y: 0 };
 
@@ -33,10 +43,17 @@ const TAGLINE = 'CAPTURED MOMENT · LASTING PLACE';
  * pin: 定位针在海报中的比例位置，用于避开被照片遮挡的区域（徽章模板中即圆心）
  */
 const MAP_SIZE = { width: 600, height: 800 };
+const CENTER_PIN = { x: 0.5, y: 0.5 };
 const TEMPLATES = [
   { id: 'polaroid', name: '拍立得', map: Object.assign({ pin: { x: 0.88, y: 0.5 } }, MAP_SIZE) },
   { id: 'split', name: '上下分割', map: Object.assign({ pin: { x: 0.5, y: 0.19 } }, MAP_SIZE) },
-  { id: 'medallion', name: '地图徽章', map: Object.assign({ pin: { x: 0.18, y: 0.846 } }, MAP_SIZE) }
+  { id: 'medallion', name: '地图徽章', map: Object.assign({ pin: { x: 0.18, y: 0.846 } }, MAP_SIZE) },
+  { id: 'magazine', name: '杂志封面', map: Object.assign({ pin: CENTER_PIN }, MAP_SIZE) },
+  { id: 'film', name: '胶片', map: Object.assign({ pin: CENTER_PIN }, MAP_SIZE) },
+  { id: 'postcard', name: '明信片', map: Object.assign({ pin: CENTER_PIN }, MAP_SIZE) },
+  { id: 'gallery', name: '画廊展签', map: Object.assign({ pin: { x: 0.9, y: 0.28 } }, MAP_SIZE) },
+  { id: 'glass', name: '玻璃卡片', map: Object.assign({ pin: CENTER_PIN }, MAP_SIZE) },
+  { id: 'typo', name: '巨字', map: Object.assign({ pin: CENTER_PIN }, MAP_SIZE) }
 ];
 
 /* ------------------------------------------------------------------ */
@@ -100,7 +117,7 @@ function measureSpaced(ctx, text, spacing) {
 let textAlpha = 1;
 
 // 小程序 Canvas 2D 不保证支持 letterSpacing，这里逐字绘制实现字距
-function drawSpacedText(ctx, text, x, y, spacing, align) {
+function drawSpacedText(ctx, text, x, y, spacing, align, mode) {
   const prevAlpha = ctx.globalAlpha;
   ctx.globalAlpha = prevAlpha * textAlpha;
   ctx.textAlign = 'left';
@@ -109,21 +126,22 @@ function drawSpacedText(ctx, text, x, y, spacing, align) {
   if (align === 'center') cursor = x - total / 2;
   else if (align === 'right') cursor = x - total;
   for (const ch of text) {
-    ctx.fillText(ch, cursor, y);
+    if (mode !== 'stroke') ctx.fillText(ch, cursor, y);
+    if (mode === 'stroke' || mode === 'both') ctx.strokeText(ch, cursor, y);
     cursor += ctx.measureText(ch).width + spacing;
   }
   ctx.globalAlpha = prevAlpha;
 }
 
 // 让大字地名自适应宽度：从 maxSize 开始逐步缩小
-function fitFontSize(ctx, text, maxWidth, maxSize, minSize, weight, family, spacing) {
+function fitFontSize(ctx, text, maxWidth, maxSize, minSize, weight, family, spacing, style) {
   let size = maxSize;
   while (size > minSize) {
-    setFont(ctx, size, weight, family);
+    setFont(ctx, size, weight, family, style);
     if (measureSpaced(ctx, text, spacing) <= maxWidth) break;
     size -= 1;
   }
-  setFont(ctx, size, weight, family);
+  setFont(ctx, size, weight, family, style);
   return size;
 }
 
@@ -416,6 +434,574 @@ function paintMedallion(ctx, scale, assets, info, tpl, style) {
   drawSpacedText(ctx, TAGLINE, W / 2, H - 14, 2.2, 'center');
 }
 
+/* ------------------------------------------------------------------ */
+/* 氛围模板：杂志封面 / 胶片 / 明信片 / 画廊展签 / 玻璃卡片 / 巨字            */
+/* ------------------------------------------------------------------ */
+
+function roundedRectPath(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+
+/**
+ * 以定位针为中心，从整张地图上截取 1:1 的一小块（迷你地图），并按主题上色。
+ * 调用方可先设置圆角 / 圆形 clip。
+ */
+function drawMapWindow(ctx, mapImg, x, y, w, h, tpl, info, style) {
+  const { theme } = style;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.fillStyle = theme.dark ? '#000000' : '#ffffff';
+  ctx.fillRect(x, y, w, h);
+  ctx.globalAlpha = theme.dark ? 0.6 : 1;
+  if (mapImg) {
+    const k = mapImg.width / POSTER_W;
+    const sw = Math.min(w * k, mapImg.width);
+    const sh = Math.min(h * k, mapImg.height);
+    const sx = clamp(mapImg.width * tpl.map.pin.x - sw / 2, 0, mapImg.width - sw);
+    const sy = clamp(mapImg.height * tpl.map.pin.y - sh / 2, 0, mapImg.height - sh);
+    ctx.drawImage(mapImg, sx, sy, sw, sh, x, y, w, h);
+  } else {
+    drawFallbackMap(ctx, x, y, w, h, info.seed, { x: 0.5, y: 0.5 }, theme.dark);
+  }
+  ctx.globalAlpha = 1;
+  applyTint(ctx, theme, x, y, w, h);
+  ctx.restore();
+}
+
+function photoText(style) {
+  const onPhoto = style.photoAlpha >= 0.5;
+  const ink = style.theme.ink;
+  return {
+    main: onPhoto ? '#ffffff' : ink,
+    sub: onPhoto ? 'rgba(255,255,255,0.82)' : hexToRgba(ink, 0.8)
+  };
+}
+
+// 全屏照片 + 上下暗角，杂志封面 / 玻璃卡片 / 巨字共用
+function drawFullBleedPhoto(ctx, assets, style, topShade, bottomShade) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  withAlpha(ctx, style.photoAlpha, () => {
+    drawImageCover(ctx, assets.photo, 0, 0, W, H, style.crop);
+    if (topShade) {
+      const g = ctx.createLinearGradient(0, 0, 0, H * 0.4);
+      g.addColorStop(0, `rgba(0,0,0,${topShade})`);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H * 0.4);
+    }
+    if (bottomShade) {
+      const g = ctx.createLinearGradient(0, H * 0.5, 0, H);
+      g.addColorStop(0, 'rgba(0,0,0,0)');
+      g.addColorStop(1, `rgba(0,0,0,${bottomShade})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, H * 0.5, W, H * 0.5);
+    }
+  });
+}
+
+// 杂志封面：超大衬线刊头 + 细线栏目 + 封面标语 + 迷你地图
+function paintMagazine(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const { main, sub } = photoText(style);
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  drawFullBleedPhoto(ctx, assets, style, 0.5, 0.62);
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = main;
+  const size = fitFontSize(ctx, info.place, W - 44, 96, 30, 700, SERIF, 3);
+  const baseline = 30 + size * 0.8;
+  drawSpacedText(ctx, info.place, W / 2, baseline, 3, 'center');
+
+  ctx.strokeStyle = sub;
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(22, baseline + 14);
+  ctx.lineTo(W - 22, baseline + 14);
+  ctx.stroke();
+  ctx.fillStyle = sub;
+  setFont(ctx, 8, 500, SANS);
+  drawSpacedText(ctx, info.dateText, 22, baseline + 29, 1.6, 'left');
+  drawSpacedText(ctx, info.coordText, W - 22, baseline + 29, 1.2, 'right');
+
+  const mapSize = 92;
+  const mx = W - 22 - mapSize;
+  const my = H - 24 - mapSize;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.4)';
+  ctx.shadowBlur = 14 * scale;
+  ctx.shadowOffsetY = 4 * scale;
+  ctx.fillStyle = '#ffffff';
+  roundedRectPath(ctx, mx - 2.5, my - 2.5, mapSize + 5, mapSize + 5, 6);
+  ctx.fill();
+  ctx.restore();
+  ctx.save();
+  roundedRectPath(ctx, mx, my, mapSize, mapSize, 4);
+  ctx.clip();
+  drawMapWindow(ctx, assets.map, mx, my, mapSize, mapSize, tpl, info, style);
+  ctx.restore();
+
+  ctx.fillStyle = sub;
+  setFont(ctx, 7.5, 600, SANS);
+  drawSpacedText(ctx, 'SPECIAL ISSUE', 22, H - 104, 3.2, 'left');
+  ctx.fillStyle = main;
+  setFont(ctx, 27, 400, SERIF, 'italic');
+  drawSpacedText(ctx, 'Captured Moment,', 22, H - 70, 0.4, 'left');
+  drawSpacedText(ctx, 'Lasting Place.', 22, H - 40, 0.4, 'left');
+}
+
+const FILM_STRIP = { x: 44, w: POSTER_W - 88 };
+const FILM_AMBER = '#f2a03d';
+const MONTH_INDEX = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
+
+// 相机背刻风格日期： '24 06 16
+function filmDate(dateText) {
+  const m = /^([A-Z]{3}) (\d{1,2}), (\d{4})$/.exec(dateText || '');
+  if (!m || !MONTH_INDEX[m[1]]) return dateText || '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `'${m[3].slice(2)}  ${pad(MONTH_INDEX[m[1]])}  ${pad(Number(m[2]))}`;
+}
+
+// 胶片：暗房底色 + 35mm 片基与齿孔 + 琥珀色背刻日期
+function paintFilm(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  ctx.fillStyle = 'rgba(9,8,7,0.88)';
+  ctx.fillRect(0, 0, W, H);
+
+  const sx = FILM_STRIP.x;
+  const sw = FILM_STRIP.w;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.6)';
+  ctx.shadowBlur = 18 * scale;
+  ctx.fillStyle = '#17130f';
+  ctx.fillRect(sx, 0, sw, H);
+  ctx.restore();
+
+  ctx.fillStyle = 'rgba(236,228,212,0.92)';
+  for (let y = 9; y < H - 8; y += 21) {
+    roundedRectPath(ctx, sx + 9, y, 9, 12, 2.2);
+    ctx.fill();
+    roundedRectPath(ctx, sx + sw - 18, y, 9, 12, 2.2);
+    ctx.fill();
+  }
+
+  const p = FILM_PHOTO;
+  ctx.fillStyle = '#000000';
+  ctx.fillRect(p.left - 1, p.top - 1, p.w + 2, p.h + 2);
+  withAlpha(ctx, style.photoAlpha, () => {
+    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
+  });
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = FILM_AMBER;
+  setFont(ctx, 7, 700, SANS);
+  drawSpacedText(ctx, 'GEOPICS 400', p.left, 38, 1.8, 'left');
+  drawSpacedText(ctx, '12A', p.left + p.w, 38, 1.8, 'right');
+
+  const bottom = p.top + p.h;
+  ctx.save();
+  ctx.shadowColor = 'rgba(242,160,61,0.85)';
+  ctx.shadowBlur = 5 * scale;
+  ctx.fillStyle = FILM_AMBER;
+  setFont(ctx, 15, 600, SANS);
+  drawSpacedText(ctx, filmDate(info.dateText), p.left, bottom + 30, 2.2, 'left');
+  ctx.restore();
+
+  ctx.fillStyle = '#efe9dd';
+  const maxW = p.w - 70;
+  fitFontSize(ctx, info.place, maxW, 24, 12, 700, SANS, 3);
+  drawSpacedText(ctx, info.place, p.left, bottom + 54, 3, 'left');
+  ctx.fillStyle = 'rgba(239,233,221,0.6)';
+  setFont(ctx, 7.5, 500, SANS);
+  drawSpacedText(ctx, info.coordText, p.left, bottom + 70, 1.2, 'left');
+
+  const ms = 54;
+  const mx = p.left + p.w - ms;
+  const my = bottom + 14;
+  ctx.save();
+  roundedRectPath(ctx, mx, my, ms, ms, 3);
+  ctx.clip();
+  drawMapWindow(ctx, assets.map, mx, my, ms, ms, tpl, info, style);
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(239,233,221,0.7)';
+  ctx.lineWidth = 0.8;
+  roundedRectPath(ctx, mx, my, ms, ms, 3);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(242,160,61,0.75)';
+  setFont(ctx, 6, 500, SANS);
+  drawSpacedText(ctx, TAGLINE, W / 2, H - 12, 1.8, 'center');
+}
+
+function drawPerforatedStamp(ctx, x, y, w, h, holeColor) {
+  ctx.fillStyle = '#fffdf6';
+  ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = holeColor;
+  const step = 8;
+  for (let px = x + step / 2; px < x + w; px += step) {
+    ctx.beginPath();
+    ctx.arc(px, y, 2.4, 0, Math.PI * 2);
+    ctx.arc(px, y + h, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (let py = y + step / 2; py < y + h; py += step) {
+    ctx.beginPath();
+    ctx.arc(x, py, 2.4, 0, Math.PI * 2);
+    ctx.arc(x + w, py, 2.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+// 明信片：纸张卡片 + 拍立得式照片 + 手写地址线 + 邮票 + 邮戳
+function paintPostcard(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const paper = '#f7f1e3';
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+
+  const cx = 22;
+  const cy = 26;
+  const cw = W - 44;
+  const ch = H - 52;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.3)';
+  ctx.shadowBlur = 22 * scale;
+  ctx.shadowOffsetY = 8 * scale;
+  ctx.fillStyle = paper;
+  roundedRectPath(ctx, cx, cy, cw, ch, 4);
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(120,100,70,0.22)';
+  ctx.lineWidth = 0.6;
+  ctx.strokeRect(cx + 7, cy + 7, cw - 14, ch - 14);
+
+  const p = POSTCARD_PHOTO;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(p.left - 4, p.top - 4, p.w + 8, p.h + 8);
+  withAlpha(ctx, style.photoAlpha, () => {
+    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
+  });
+
+  ctx.textBaseline = 'alphabetic';
+  const ty = p.top + p.h + 24;
+  ctx.fillStyle = '#8a7c66';
+  setFont(ctx, 7.5, 600, SANS);
+  drawSpacedText(ctx, 'GREETINGS FROM', p.left, ty, 3, 'left');
+  ctx.fillStyle = '#2b2622';
+  fitFontSize(ctx, info.place, 200, 36, 16, 700, SERIF, 1, 'italic');
+  drawSpacedText(ctx, info.place, p.left, ty + 38, 1, 'left');
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(60,50,40,0.38)';
+  ctx.lineWidth = 0.6;
+  ctx.setLineDash([2, 3]);
+  const lines = [ty + 62, ty + 84, ty + 106];
+  lines.forEach((ly) => {
+    ctx.beginPath();
+    ctx.moveTo(p.left, ly);
+    ctx.lineTo(p.left + 168, ly);
+    ctx.stroke();
+  });
+  ctx.restore();
+  ctx.fillStyle = '#5a4d3c';
+  setFont(ctx, 9.5, 400, SERIF, 'italic');
+  drawSpacedText(ctx, info.coordText, p.left + 2, lines[0] - 3, 0.6, 'left');
+  drawSpacedText(ctx, info.dateText, p.left + 2, lines[1] - 3, 0.6, 'left');
+  drawSpacedText(ctx, 'Wish you were here', p.left + 2, lines[2] - 3, 0.6, 'left');
+
+  const stampW = 80;
+  const stampH = 100;
+  const sx = p.left + p.w - stampW;
+  const sy = p.top + p.h + 14;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.18)';
+  ctx.shadowBlur = 5 * scale;
+  ctx.shadowOffsetY = 1.5 * scale;
+  drawPerforatedStamp(ctx, sx, sy, stampW, stampH, paper);
+  ctx.restore();
+  drawPerforatedStamp(ctx, sx, sy, stampW, stampH, paper);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(sx + 7, sy + 7, stampW - 14, stampH - 32);
+  ctx.clip();
+  drawMapWindow(ctx, assets.map, sx + 7, sy + 7, stampW - 14, stampH - 32, tpl, info, style);
+  ctx.restore();
+  ctx.fillStyle = '#3a3a3a';
+  setFont(ctx, 7.5, 800, SANS);
+  drawSpacedText(ctx, 'GEOPICS', sx + stampW / 2, sy + stampH - 14, 2.2, 'center');
+  setFont(ctx, 5.5, 500, SANS);
+  ctx.fillStyle = '#8a8a86';
+  drawSpacedText(ctx, 'AIR MAIL', sx + stampW / 2, sy + stampH - 6.5, 1.8, 'center');
+
+  // 邮戳：斜置双圈 + 地名日期 + 波浪消印线
+  const pmx = sx - 6;
+  const pmy = sy + stampH - 26;
+  ctx.save();
+  ctx.translate(pmx, pmy);
+  ctx.rotate((-12 * Math.PI) / 180);
+  ctx.globalAlpha = 0.78;
+  ctx.strokeStyle = '#30426e';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(0, 0, 30, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 0.7;
+  ctx.beginPath();
+  ctx.arc(0, 0, 25, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 1.1;
+  for (let i = -2; i <= 2; i++) {
+    ctx.beginPath();
+    for (let x = -100; x <= -33; x += 2) {
+      const y = i * 5.5 + Math.sin(x / 4.2) * 2;
+      if (x === -100) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#30426e';
+  fitFontSize(ctx, info.place, 40, 9, 5, 800, SANS, 0.8);
+  drawSpacedText(ctx, info.place, 0, -2, 0.8, 'center');
+  setFont(ctx, 5.5, 600, SANS);
+  drawSpacedText(ctx, info.dateText, 0, 9, 0.5, 'center');
+  ctx.restore();
+
+  ctx.fillStyle = '#8a7c66';
+  setFont(ctx, 7, 400, SERIF);
+  drawSpacedText(ctx, TAGLINE, W / 2, cy + ch - 18, 2.2, 'center');
+}
+
+// 画廊展签：地图作墙面，黑框 + 白色卡纸 + 博物馆式说明牌
+function paintGallery(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const ink = style.theme.ink;
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = hexToRgba(ink, 0.7);
+  setFont(ctx, 7.5, 500, SERIF);
+  drawSpacedText(ctx, 'PERMANENT COLLECTION', W / 2, 34, 3.4, 'center');
+
+  const bandTop = 54;
+  const bandH = 358;
+  const mat = 24;
+  const photo = fitInside(assets.photo, 240, 310);
+  const fw = photo.w + mat * 2;
+  const fh = photo.h + mat * 2;
+  const fx = (W - fw) / 2;
+  const fy = bandTop + (bandH - fh) / 2;
+
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.38)';
+  ctx.shadowBlur = 28 * scale;
+  ctx.shadowOffsetY = 12 * scale;
+  ctx.fillStyle = '#181614';
+  ctx.fillRect(fx - 4, fy - 4, fw + 8, fh + 8);
+  ctx.restore();
+  ctx.fillStyle = '#faf8f2';
+  ctx.fillRect(fx, fy, fw, fh);
+  ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+  ctx.lineWidth = 0.8;
+  ctx.strokeRect(fx + mat - 1, fy + mat - 1, photo.w + 2, photo.h + 2);
+  withAlpha(ctx, style.photoAlpha, () => {
+    ctx.drawImage(assets.photo, fx + mat, fy + mat, photo.w, photo.h);
+  });
+
+  const pw = 176;
+  const ph = 60;
+  const px = fx + fw - pw;
+  const py = bandTop + bandH + 22;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.22)';
+  ctx.shadowBlur = 8 * scale;
+  ctx.shadowOffsetY = 2 * scale;
+  ctx.fillStyle = '#fdfcf8';
+  ctx.fillRect(px, py, pw, ph);
+  ctx.restore();
+  ctx.fillStyle = '#1a1a1a';
+  fitFontSize(ctx, info.place, pw - 24, 11, 7, 800, SANS, 1.6);
+  drawSpacedText(ctx, info.place, px + 12, py + 19, 1.6, 'left');
+  ctx.fillStyle = '#555555';
+  setFont(ctx, 8.5, 400, SERIF, 'italic');
+  drawSpacedText(ctx, info.coordText, px + 12, py + 33, 0.4, 'left');
+  ctx.fillStyle = '#8a8a86';
+  setFont(ctx, 6.5, 500, SANS);
+  drawSpacedText(ctx, `${info.dateText}  ·  ARCHIVAL PIGMENT PRINT`, px + 12, py + 48, 0.9, 'left');
+
+  ctx.fillStyle = hexToRgba(ink, 0.7);
+  setFont(ctx, 7.5, 400, SERIF);
+  drawSpacedText(ctx, TAGLINE, W / 2, H - 20, 2.4, 'center');
+}
+
+// 玻璃卡片：全屏照片 + 底部半透明深色玻璃面板（含迷你地图）
+function paintGlass(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  drawFullBleedPhoto(ctx, assets, style, 0.28, 0.25);
+
+  ctx.textBaseline = 'alphabetic';
+  setFont(ctx, 8, 600, SANS);
+  const chipText = info.dateText;
+  const chipW = measureSpaced(ctx, chipText, 1.6) + 36;
+  const chipX = 20;
+  const chipY = 22;
+  ctx.fillStyle = 'rgba(18,20,24,0.42)';
+  roundedRectPath(ctx, chipX, chipY, chipW, 24, 12);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.32)';
+  ctx.lineWidth = 0.6;
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(chipX + 13, chipY + 12, 2.8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  drawSpacedText(ctx, chipText, chipX + 23, chipY + 15.3, 1.6, 'left');
+
+  const x = 20;
+  const y = H - 176;
+  const w = W - 40;
+  const h = 156;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.35)';
+  ctx.shadowBlur = 24 * scale;
+  ctx.shadowOffsetY = 8 * scale;
+  const glass = ctx.createLinearGradient(x, y, x + w, y + h);
+  glass.addColorStop(0, 'rgba(24,27,32,0.62)');
+  glass.addColorStop(1, 'rgba(14,16,20,0.42)');
+  ctx.fillStyle = glass;
+  roundedRectPath(ctx, x, y, w, h, 22);
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+  ctx.lineWidth = 0.8;
+  roundedRectPath(ctx, x, y, w, h, 22);
+  ctx.stroke();
+
+  const ms = 128;
+  const mx = x + 14;
+  const my = y + 14;
+  ctx.save();
+  roundedRectPath(ctx, mx, my, ms, ms, 16);
+  ctx.clip();
+  drawMapWindow(ctx, assets.map, mx, my, ms, ms, tpl, info, style);
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+  ctx.lineWidth = 0.8;
+  roundedRectPath(ctx, mx, my, ms, ms, 16);
+  ctx.stroke();
+
+  const tx = mx + ms + 18;
+  const tw = x + w - 16 - tx;
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  setFont(ctx, 6.5, 600, SANS);
+  drawSpacedText(ctx, 'LOCATION', tx, y + 30, 3, 'left');
+  ctx.fillStyle = '#ffffff';
+  fitFontSize(ctx, info.place, tw, 32, 14, 800, SANS, 1.6);
+  drawSpacedText(ctx, info.place, tx, y + 64, 1.6, 'left');
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(tx, y + 78);
+  ctx.lineTo(tx + tw, y + 78);
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.86)';
+  setFont(ctx, 8.5, 500, SANS);
+  drawSpacedText(ctx, info.coordText, tx, y + 98, 1, 'left');
+  drawSpacedText(ctx, info.dateText, tx, y + 114, 1, 'left');
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  setFont(ctx, 6.5, 400, SERIF, 'italic');
+  drawSpacedText(ctx, TAGLINE, tx, y + 140, 0.9, 'left');
+}
+
+// 巨字：全屏照片 + 镂空巨型地名 + 竖排标语 + 圆形迷你地图
+function paintTypo(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const onPhoto = style.photoAlpha >= 0.5;
+  const { main, sub } = photoText(style);
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  drawFullBleedPhoto(ctx, assets, style, 0.3, 0.42);
+  withAlpha(ctx, style.photoAlpha, () => {
+    ctx.fillStyle = 'rgba(0,0,0,0.16)';
+    ctx.fillRect(0, 0, W, H);
+  });
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineJoin = 'round';
+  const size = fitFontSize(ctx, info.place, W - 28, 140, 38, 900, SANS, 2);
+  const baseline = H * 0.7;
+  ctx.fillStyle = onPhoto ? 'rgba(255,255,255,0.14)' : hexToRgba(style.theme.ink, 0.12);
+  ctx.strokeStyle = main;
+  ctx.lineWidth = Math.max(0.9, size / 90);
+  drawSpacedText(ctx, info.place, 14, baseline, 2, 'left', 'both');
+
+  ctx.strokeStyle = sub;
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(20, baseline + 18);
+  ctx.lineTo(W - 20, baseline + 18);
+  ctx.stroke();
+  ctx.fillStyle = main;
+  setFont(ctx, 8.5, 500, SANS);
+  drawSpacedText(ctx, info.coordText, 20, baseline + 36, 1.6, 'left');
+  drawSpacedText(ctx, info.dateText, W - 20, baseline + 36, 1.6, 'right');
+
+  const r = 30;
+  const mx = 20 + r;
+  const my = 22 + r;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.35)';
+  ctx.shadowBlur = 12 * scale;
+  ctx.shadowOffsetY = 3 * scale;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(mx, my, r + 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(mx, my, r, 0, Math.PI * 2);
+  ctx.clip();
+  drawMapWindow(ctx, assets.map, mx - r, my - r, r * 2, r * 2, tpl, info, style);
+  ctx.restore();
+
+  ctx.fillStyle = main;
+  setFont(ctx, 9, 800, SANS);
+  drawSpacedText(ctx, 'GEOPICS', W - 20, 40, 4.2, 'right');
+
+  ctx.save();
+  ctx.translate(W - 15, 190);
+  ctx.rotate(-Math.PI / 2);
+  ctx.fillStyle = sub;
+  setFont(ctx, 6.5, 500, SERIF);
+  drawSpacedText(ctx, TAGLINE, 0, 0, 3.2, 'center');
+  ctx.restore();
+}
+
 function paintEmpty(ctx) {
   const W = POSTER_W;
   const H = POSTER_H;
@@ -436,7 +1022,13 @@ function paintEmpty(ctx) {
 const PAINTERS = {
   polaroid: paintPolaroid,
   split: paintSplit,
-  medallion: paintMedallion
+  medallion: paintMedallion,
+  magazine: paintMagazine,
+  film: paintFilm,
+  postcard: paintPostcard,
+  gallery: paintGallery,
+  glass: paintGlass,
+  typo: paintTypo
 };
 
 /**
@@ -829,10 +1421,12 @@ Page({
     if (!region || !this._photoSize || !e.touches.length) return;
 
     const t = e.touches[0];
-    // 拼接图仅在照片区域内拖动才调整取景，避免误触地图区
-    if (typeof t.y === 'number') {
-      const logicalY = (t.y * POSTER_W) / this.cssSize.w;
-      if (logicalY < region.top || logicalY > region.top + region.h) {
+    // 仅在照片区域内拖动才调整取景，避免误触其他区域
+    if (typeof t.y === 'number' && typeof t.x === 'number') {
+      const k = POSTER_W / this.cssSize.w;
+      const lx = t.x * k;
+      const ly = t.y * k;
+      if (lx < region.left || lx > region.left + region.w || ly < region.top || ly > region.top + region.h) {
         this._gesture = null;
         return;
       }
