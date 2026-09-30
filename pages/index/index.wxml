@@ -84,6 +84,60 @@
     />
   </view>
 
+  <view class="card">
+    <view class="zoom-head">
+      <text class="meta-label">MAP COLOR</text>
+      <text class="meta-value">{{mapColorId === 'custom' ? customHex : ''}}</text>
+    </view>
+    <scroll-view scroll-x enable-flex class="swatches">
+      <view
+        wx:for="{{themes}}"
+        wx:key="id"
+        class="swatch-item"
+        data-id="{{item.id}}"
+        bindtap="onTapTheme"
+      >
+        <view class="swatch {{item.id === mapColorId ? 'swatch-active' : ''}} {{item.id === 'custom' ? 'swatch-custom' : ''}}" style="background:{{item.tint}};">
+          <text wx:if="{{item.id === 'custom'}}" class="swatch-plus">+</text>
+        </view>
+        <text class="swatch-name {{item.id === mapColorId ? 'swatch-name-active' : ''}}">{{item.name}}</text>
+      </view>
+    </scroll-view>
+    <view wx:if="{{mapColorId === 'custom'}}" class="custom-row">
+      <text class="meta-label">HEX</text>
+      <input
+        class="custom-input"
+        value="{{customHexText}}"
+        maxlength="7"
+        placeholder="#E8DFD0"
+        placeholder-class="place-placeholder"
+        bindinput="onCustomHexInput"
+      />
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="zoom-head">
+      <text class="meta-label">OPACITY</text>
+      <text class="link" bindtap="onResetOpacity">重置</text>
+    </view>
+    <view class="op-row">
+      <text class="op-name">地图</text>
+      <slider class="op-slider" min="0" max="100" step="1" value="{{mapOpacity}}" block-size="16" activeColor="#111111" backgroundColor="#dcdad5" data-key="mapOpacity" bindchanging="onOpacityChanging" bindchange="onOpacityChange" />
+      <text class="op-value">{{mapOpacity}}%</text>
+    </view>
+    <view class="op-row">
+      <text class="op-name">照片</text>
+      <slider class="op-slider" min="0" max="100" step="1" value="{{photoOpacity}}" block-size="16" activeColor="#111111" backgroundColor="#dcdad5" data-key="photoOpacity" bindchanging="onOpacityChanging" bindchange="onOpacityChange" />
+      <text class="op-value">{{photoOpacity}}%</text>
+    </view>
+    <view class="op-row">
+      <text class="op-name">文字</text>
+      <slider class="op-slider" min="0" max="100" step="1" value="{{textOpacity}}" block-size="16" activeColor="#111111" backgroundColor="#dcdad5" data-key="textOpacity" bindchanging="onOpacityChanging" bindchange="onOpacityChange" />
+      <text class="op-value">{{textOpacity}}%</text>
+    </view>
+  </view>
+
   <button class="btn btn-primary btn-save" hover-class="btn-hover" disabled="{{!hasPhoto || busy}}" bindtap="onSavePoster">
     保存高清海报
   </button>
