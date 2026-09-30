@@ -2,6 +2,8 @@
  * 会员状态：邀请码（不限量）+ 额度包（月度 / 年度会员）。
  * 每次购买得到一个独立的额度包 { planId, quota, used, until }，多次购买可叠加，
  * 每保存一张无水印高清海报消耗 1 个额度；额度用完或到期即失效。
+ * 每位用户另有 config.membership.freeQuota 张免费额度（freeUsed 记录已用张数），优先于额度包消耗；
+ * 免费额度用完后才显示水印。
  * 单张付费只对当前会话中的那张照片生效，由页面在内存里记录（item.unlocked）。
  *
  * 注意：本地缓存与客户端校验只能防君子。正式收费请在服务端保存权益并校验，
@@ -31,6 +33,10 @@ function defaultStorage() {
   };
 }
 
+function cleanCount(n) {
+  return Math.max(0, Math.floor(Number(n) || 0));
+}
+
 function cleanPack(p) {
   return {
     planId: String((p && p.planId) || ''),
@@ -46,6 +52,7 @@ function load(storage) {
   return {
     invite: !!state.invite,
     bought: !!state.bought,
+    freeUsed: cleanCount(state.freeUsed),
     packs: Array.isArray(state.packs) ? state.packs.map(cleanPack) : []
   };
 }
@@ -54,6 +61,7 @@ function save(state, storage) {
   (storage || defaultStorage()).set(KEY, {
     invite: !!state.invite,
     bought: !!state.bought,
+    freeUsed: cleanCount(state.freeUsed),
     packs: state.packs.map(cleanPack)
   });
 }
@@ -85,17 +93,34 @@ function remainingQuota(state, now) {
   return activePacks(state, now).reduce((sum, p) => sum + (p.quota - p.used), 0);
 }
 
+// 剩余免费张数
+function freeRemaining(state) {
+  return Math.max(0, cleanCount(config.membership.freeQuota) - cleanCount(state.freeUsed));
+}
+
+// 当前还能保存的无水印张数：邀请码不限量，否则为免费额度 + 额度包
+function availableQuota(state, now) {
+  if (state.invite) return Infinity;
+  return freeRemaining(state) + remainingQuota(state, now);
+}
+
 // 购买额度包：每次购买都是新的一包（有效期从购买时起算），可叠加
 function addPack(state, plan, now) {
   const t = now0(now);
   const pack = { planId: plan.id, quota: plan.quota, used: 0, until: t + plan.days * DAY };
-  return { invite: state.invite, bought: true, packs: state.packs.filter((p) => p.until > t).concat(pack) };
+  return {
+    invite: state.invite,
+    bought: true,
+    freeUsed: cleanCount(state.freeUsed),
+    packs: state.packs.filter((p) => p.until > t).concat(pack)
+  };
 }
 
-// 消耗 n 个额度，优先扣最早到期的包
+// 消耗 n 个额度：先用免费额度，再扣最早到期的包
 function consume(state, n, now) {
   if (state.invite) return state;
-  let left = n;
+  const useFree = Math.min(n, freeRemaining(state));
+  let left = n - useFree;
   const packs = state.packs.map(cleanPack);
   const t = now0(now);
   const order = packs
@@ -108,7 +133,7 @@ function consume(state, n, now) {
     packs[i].used += take;
     left -= take;
   }
-  return { invite: state.invite, bought: state.bought, packs };
+  return { invite: state.invite, bought: state.bought, freeUsed: cleanCount(state.freeUsed) + useFree, packs };
 }
 
 function pad(n) {
@@ -123,18 +148,20 @@ function formatDate(ms) {
 // 展示在标题栏的短文案
 function label(state, now) {
   if (state.invite) return '会员 · 邀请码';
-  const rest = remainingQuota(state, now);
-  if (rest > 0) return `会员 · 剩余 ${rest} 张`;
+  if (remainingQuota(state, now) > 0) return `会员 · 剩余 ${availableQuota(state, now)} 张`;
   if (state.bought) return '额度已用完 · 续购';
-  return '免费版 · 开通会员';
+  const free = freeRemaining(state);
+  if (free > 0) return `免费额度剩余 ${free} 张 · 开通会员`;
+  return '免费额度已用完 · 开通会员';
 }
 
 // 大标题旁胶囊按钮上的短文案
 function chipLabel(state, now) {
   if (state.invite) return '会员';
-  const rest = remainingQuota(state, now);
-  if (rest > 0) return `会员 · ${rest} 张`;
-  return state.bought ? '续购会员' : '开通会员';
+  if (remainingQuota(state, now) > 0) return `会员 · ${availableQuota(state, now)} 张`;
+  if (state.bought) return '续购会员';
+  const free = freeRemaining(state);
+  return free > 0 ? `免费 · ${free} 张` : '开通会员';
 }
 
 // 付费面板中的额度明细
@@ -156,6 +183,8 @@ module.exports = {
   isValidInvite,
   activePacks,
   remainingQuota,
+  freeRemaining,
+  availableQuota,
   addPack,
   consume,
   label,

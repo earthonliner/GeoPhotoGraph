@@ -40,6 +40,8 @@ module.exports = {
   membership: {
     // 邀请码（不区分大小写）。仅在客户端校验，正式上线请改为服务端校验（见 README「会员」）
     inviteCodes: ['geo0930'],
+    // 每位用户的免费额度（张）：保存一张无水印海报消耗 1 张，用完后预览恢复水印且不可下载
+    freeQuota: 2,
     // price 单位：分；quota 为有效期内可下载的无水印海报张数，可多次购买叠加
     plans: [
       { id: 'month', name: '月度会员', desc: '120 张 / 月，30 天内有效', price: 1490, days: 30, quota: 120 },
