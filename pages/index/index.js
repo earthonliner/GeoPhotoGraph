@@ -1,6 +1,9 @@
 const exifParser = require('../../utils/exif-parser');
 const mapService = require('../../utils/map-service');
 const placeName = require('../../utils/place-name');
+const themes = require('../../utils/themes');
+
+const { hexToRgba } = themes;
 
 /* ------------------------------------------------------------------ */
 /* 常量与模板配置                                                       */
@@ -17,13 +20,15 @@ const SERIF = 'Georgia, "Times New Roman", "Songti SC", serif';
 const TAGLINE = 'CAPTURED MOMENT · LASTING PLACE';
 
 /**
- * map: 该模板所需地图底图的请求尺寸（@2x 后即为实际像素，比例需与绘制区域一致）
- * pin: 定位针在地图图片中的比例位置，避免被照片遮挡
+ * 所有模板都请求整张海报比例（3:4）的地图，作为最底层背景，
+ * 这样照片降低不透明度时可以与地图自然融合。
+ * pin: 定位针在海报中的比例位置，用于避开被照片遮挡的区域（徽章模板中即圆心）
  */
+const MAP_SIZE = { width: 600, height: 800 };
 const TEMPLATES = [
-  { id: 'polaroid', name: '拍立得', map: { width: 600, height: 800, pin: { x: 0.88, y: 0.5 } } },
-  { id: 'split', name: '上下分割', map: { width: 600, height: 320, pin: { x: 0.5, y: 0.42 } } },
-  { id: 'medallion', name: '地图徽章', map: { width: 400, height: 400, pin: { x: 0.5, y: 0.5 } } }
+  { id: 'polaroid', name: '拍立得', map: Object.assign({ pin: { x: 0.88, y: 0.5 } }, MAP_SIZE) },
+  { id: 'split', name: '上下分割', map: Object.assign({ pin: { x: 0.5, y: 0.19 } }, MAP_SIZE) },
+  { id: 'medallion', name: '地图徽章', map: Object.assign({ pin: { x: 0.18, y: 0.846 } }, MAP_SIZE) }
 ];
 
 /* ------------------------------------------------------------------ */
@@ -83,8 +88,13 @@ function measureSpaced(ctx, text, spacing) {
   return Math.max(0, w - spacing);
 }
 
+// 当前海报的文字不透明度（paintPoster 内同步设置）
+let textAlpha = 1;
+
 // 小程序 Canvas 2D 不保证支持 letterSpacing，这里逐字绘制实现字距
 function drawSpacedText(ctx, text, x, y, spacing, align) {
+  const prevAlpha = ctx.globalAlpha;
+  ctx.globalAlpha = prevAlpha * textAlpha;
   ctx.textAlign = 'left';
   const total = measureSpaced(ctx, text, spacing);
   let cursor = x;
@@ -94,6 +104,7 @@ function drawSpacedText(ctx, text, x, y, spacing, align) {
     ctx.fillText(ch, cursor, y);
     cursor += ctx.measureText(ch).width + spacing;
   }
+  ctx.globalAlpha = prevAlpha;
 }
 
 // 让大字地名自适应宽度：从 maxSize 开始逐步缩小
@@ -121,12 +132,12 @@ function fitInside(img, maxW, maxH) {
 }
 
 // 无 token / 下载失败时的本地极简底图（按坐标做伪随机，同一位置结果稳定）
-function drawFallbackMap(ctx, x, y, w, h, seed, pin) {
+function drawFallbackMap(ctx, x, y, w, h, seed, pin, dark) {
   const rand = mulberry32(seed);
-  ctx.fillStyle = '#ecebe7';
+  ctx.fillStyle = dark ? '#1c1d1f' : '#ecebe7';
   ctx.fillRect(x, y, w, h);
 
-  ctx.strokeStyle = 'rgba(0,0,0,0.05)';
+  ctx.strokeStyle = dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)';
   ctx.lineWidth = 0.6;
   const step = 24;
   ctx.beginPath();
@@ -140,7 +151,7 @@ function drawFallbackMap(ctx, x, y, w, h, seed, pin) {
   }
   ctx.stroke();
 
-  ctx.fillStyle = '#dedde9';
+  ctx.fillStyle = dark ? '#2a2c31' : '#dedde9';
   ctx.globalAlpha = 0.45;
   ctx.beginPath();
   ctx.ellipse(x + w * (0.15 + rand() * 0.3), y + h * (0.6 + rand() * 0.3), w * 0.28, h * 0.12, rand(), 0, Math.PI * 2);
@@ -149,8 +160,11 @@ function drawFallbackMap(ctx, x, y, w, h, seed, pin) {
 
   ctx.lineCap = 'round';
   for (let i = 0; i < 16; i++) {
-    ctx.strokeStyle = i % 4 === 0 ? '#ffffff' : 'rgba(255,255,255,0.75)';
-    ctx.lineWidth = i % 4 === 0 ? 3.2 : 1.4;
+    const major = i % 4 === 0;
+    ctx.strokeStyle = dark
+      ? major ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.14)'
+      : major ? '#ffffff' : 'rgba(255,255,255,0.75)';
+    ctx.lineWidth = major ? 3.2 : 1.4;
     ctx.beginPath();
     const sx = x + rand() * w;
     const sy = y + rand() * h;
@@ -169,24 +183,61 @@ function drawFallbackMap(ctx, x, y, w, h, seed, pin) {
   if (pin) {
     const px = x + w * pin.x;
     const py = y + h * pin.y;
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = dark ? '#111111' : '#ffffff';
     ctx.beginPath();
     ctx.arc(px, py, 6, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#111111';
+    ctx.fillStyle = dark ? '#ffffff' : '#111111';
     ctx.beginPath();
     ctx.arc(px, py, 3.6, 0, Math.PI * 2);
     ctx.fill();
   }
 }
 
-function drawMapRegion(ctx, mapImg, x, y, w, h, tpl, seed) {
+// 用主题色给灰阶地图上色；设备不支持混合模式时退化为半透明色罩
+function applyTint(ctx, theme, x, y, w, h) {
+  const op = theme.dark ? 'screen' : 'multiply';
+  ctx.save();
+  ctx.globalCompositeOperation = op;
+  if (ctx.globalCompositeOperation !== op) {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 0.55;
+  }
+  ctx.fillStyle = theme.tint;
+  ctx.fillRect(x, y, w, h);
+  ctx.restore();
+}
+
+/**
+ * 绘制带主题色与不透明度的地图区域。
+ * 浅色：白底 -> 地图(alpha) -> multiply 主题色；深色：黑底 -> 地图(alpha) -> screen 主题色。
+ * alpha=0 时恰为纯主题色。
+ */
+function drawMapRegion(ctx, mapImg, x, y, w, h, tpl, info, style) {
+  const { theme } = style;
   ctx.save();
   ctx.beginPath();
   ctx.rect(x, y, w, h);
   ctx.clip();
+
+  ctx.fillStyle = theme.dark ? '#000000' : '#ffffff';
+  ctx.fillRect(x, y, w, h);
+
+  // 深色地图再压暗一档，避免 screen 叠加后主题色被“洗灰”
+  ctx.globalAlpha = theme.dark ? style.mapAlpha * 0.6 : style.mapAlpha;
   if (mapImg) drawImageCover(ctx, mapImg, x, y, w, h);
-  else drawFallbackMap(ctx, x, y, w, h, seed, tpl.map.pin);
+  else drawFallbackMap(ctx, x, y, w, h, info.seed, tpl.map.pin, theme.dark);
+  ctx.globalAlpha = 1;
+
+  applyTint(ctx, theme, x, y, w, h);
+  ctx.restore();
+}
+
+// 照片按不透明度绘制，低不透明度时会与下方的地图 / 主题色融合
+function withAlpha(ctx, alpha, draw) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  draw();
   ctx.restore();
 }
 
@@ -195,21 +246,20 @@ function drawMapRegion(ctx, mapImg, x, y, w, h, tpl, seed) {
 /* ------------------------------------------------------------------ */
 
 // 样式 A：地图全屏背景 + 拍立得相框（白边 + 投影）
-function paintPolaroid(ctx, scale, assets, info, tpl) {
+function paintPolaroid(ctx, scale, assets, info, tpl, style) {
   const W = POSTER_W;
   const H = POSTER_H;
+  const ink = style.theme.ink;
 
-  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info.seed);
-  ctx.fillStyle = 'rgba(245,244,240,0.32)';
-  ctx.fillRect(0, 0, W, H);
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
 
   // 顶部：大字地名 + 坐标 / 日期
-  ctx.fillStyle = '#111111';
+  ctx.fillStyle = ink;
   ctx.textBaseline = 'alphabetic';
   fitFontSize(ctx, info.place, W - 48, 46, 22, 800, SANS, 2);
   drawSpacedText(ctx, info.place, 24, 62, 2, 'left');
 
-  ctx.fillStyle = 'rgba(17,17,17,0.72)';
+  ctx.fillStyle = hexToRgba(ink, 0.72);
   setFont(ctx, 8.5, 500, SANS);
   drawSpacedText(ctx, info.coordText, 24, 82, 1.2, 'left');
   drawSpacedText(ctx, info.dateText, W - 24, 82, 1.2, 'right');
@@ -234,12 +284,14 @@ function paintPolaroid(ctx, scale, assets, info, tpl) {
   ctx.fillRect(fx, fy, frameW, frameH);
   ctx.restore();
 
-  ctx.drawImage(assets.photo, fx + pad, fy + pad, photo.w, photo.h);
+  withAlpha(ctx, style.photoAlpha, () => {
+    ctx.drawImage(assets.photo, fx + pad, fy + pad, photo.w, photo.h);
+  });
   ctx.strokeStyle = 'rgba(0,0,0,0.08)';
   ctx.lineWidth = 0.5;
   ctx.strokeRect(fx + pad, fy + pad, photo.w, photo.h);
 
-  // 相框底边小字
+  // 相框底边小字（相框本身是浅色，文字固定深色）
   const stripY = fy + pad + photo.h + 27;
   ctx.fillStyle = '#2a2a2a';
   setFont(ctx, 9.5, 400, SERIF, 'italic');
@@ -249,55 +301,63 @@ function paintPolaroid(ctx, scale, assets, info, tpl) {
   drawSpacedText(ctx, info.dateText, fx + frameW - pad, stripY, 1, 'right');
 
   // 底部标语
-  ctx.fillStyle = '#222222';
+  ctx.fillStyle = hexToRgba(ink, 0.85);
   setFont(ctx, 8, 400, SERIF);
   drawSpacedText(ctx, TAGLINE, W / 2, H - 20, 2.4, 'center');
 }
 
 // 样式 B：上 40% 地图 + 大字地名，下 60% 照片
-function paintSplit(ctx, scale, assets, info, tpl) {
+function paintSplit(ctx, scale, assets, info, tpl, style) {
   const W = POSTER_W;
   const H = POSTER_H;
   const mapH = H * 0.4;
+  const ink = style.theme.ink;
 
-  drawMapRegion(ctx, assets.map, 0, 0, W, mapH, tpl, info.seed);
-  ctx.fillStyle = 'rgba(255,255,255,0.16)';
-  ctx.fillRect(0, 0, W, mapH);
+  // 地图铺满整张海报，照片不透明度 < 1 时下半部分会透出地图
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  withAlpha(ctx, style.photoAlpha, () => {
+    drawImageCover(ctx, assets.photo, 0, mapH, W, H - mapH);
+  });
 
-  drawImageCover(ctx, assets.photo, 0, mapH, W, H - mapH);
-
-  ctx.fillStyle = 'rgba(17,17,17,0.75)';
+  ctx.fillStyle = hexToRgba(ink, 0.75);
   ctx.textBaseline = 'alphabetic';
   setFont(ctx, 8.5, 500, SANS);
   drawSpacedText(ctx, info.coordText, 22, 30, 1.2, 'left');
   drawSpacedText(ctx, info.dateText, W - 22, 30, 1.2, 'right');
 
-  ctx.fillStyle = '#0d0d0d';
+  ctx.fillStyle = ink;
   fitFontSize(ctx, info.place, W - 44, 66, 26, 800, SANS, 3);
   drawSpacedText(ctx, info.place, 22, mapH - 22, 3, 'left');
 
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fillStyle = style.photoAlpha >= 0.5 ? 'rgba(255,255,255,0.9)' : hexToRgba(ink, 0.8);
   setFont(ctx, 7.5, 400, SERIF);
   drawSpacedText(ctx, TAGLINE, W / 2, H - 16, 2.2, 'center');
 }
 
 // 样式 C：照片全屏 + 底部渐变 + 圆形地图徽章
-function paintMedallion(ctx, scale, assets, info, tpl) {
+function paintMedallion(ctx, scale, assets, info, tpl, style) {
   const W = POSTER_W;
   const H = POSTER_H;
+  const ink = style.theme.ink;
+  const onPhoto = style.photoAlpha >= 0.5;
+  const textColor = onPhoto ? '#ffffff' : ink;
 
-  drawImageCover(ctx, assets.photo, 0, 0, W, H);
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
 
-  const gradTop = H * 0.52;
-  const grad = ctx.createLinearGradient(0, gradTop, 0, H);
-  grad.addColorStop(0, 'rgba(0,0,0,0)');
-  grad.addColorStop(1, 'rgba(0,0,0,0.72)');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, gradTop, W, H - gradTop);
+  withAlpha(ctx, style.photoAlpha, () => {
+    drawImageCover(ctx, assets.photo, 0, 0, W, H);
+    const gradTop = H * 0.52;
+    const grad = ctx.createLinearGradient(0, gradTop, 0, H);
+    grad.addColorStop(0, 'rgba(0,0,0,0)');
+    grad.addColorStop(1, 'rgba(0,0,0,0.72)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, gradTop, W, H - gradTop);
+  });
 
+  // 徽章圆心与地图中的定位针位置一致（见 TEMPLATES）
   const r = 48;
-  const cx = 24 + r;
-  const cy = H - 34 - r;
+  const cx = W * tpl.map.pin.x;
+  const cy = H * tpl.map.pin.y;
 
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.35)';
@@ -313,22 +373,22 @@ function paintMedallion(ctx, scale, assets, info, tpl) {
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.clip();
-  drawMapRegion(ctx, assets.map, cx - r, cy - r, r * 2, r * 2, tpl, info.seed);
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, Object.assign({}, style, { mapAlpha: 1 }));
   ctx.restore();
 
   const tx = cx + r + 18;
   const maxW = W - tx - 24;
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = textColor;
   ctx.textBaseline = 'alphabetic';
   fitFontSize(ctx, info.place, maxW, 40, 18, 800, SANS, 2);
   drawSpacedText(ctx, info.place, tx, cy - 2, 2, 'left');
 
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.fillStyle = onPhoto ? 'rgba(255,255,255,0.85)' : hexToRgba(ink, 0.8);
   setFont(ctx, 8.5, 500, SANS);
   drawSpacedText(ctx, info.coordText, tx, cy + 18, 1.1, 'left');
   drawSpacedText(ctx, info.dateText, tx, cy + 34, 1.1, 'left');
 
-  ctx.fillStyle = 'rgba(255,255,255,0.8)';
+  ctx.fillStyle = onPhoto ? 'rgba(255,255,255,0.8)' : hexToRgba(ink, 0.7);
   setFont(ctx, 7.5, 400, SERIF);
   drawSpacedText(ctx, TAGLINE, W / 2, H - 14, 2.2, 'center');
 }
@@ -360,8 +420,9 @@ const PAINTERS = {
  * 统一入口：在任意 2D canvas 上绘制整张海报。
  * @param canvas  Canvas 2D 节点（其 width/height 已设置为物理像素）
  * @param assets  { photo: Image, map: Image|null } 为 null 时绘制占位
+ * @param style   { theme, mapAlpha, photoAlpha, textAlpha }，透明度范围 0~1
  */
-function paintPoster(canvas, tplId, assets, info) {
+function paintPoster(canvas, tplId, assets, info, style) {
   const ctx = canvas.getContext('2d');
   const scale = canvas.width / POSTER_W;
 
@@ -374,7 +435,9 @@ function paintPoster(canvas, tplId, assets, info) {
     return;
   }
   const tpl = TEMPLATES.find((t) => t.id === tplId) || TEMPLATES[0];
-  PAINTERS[tpl.id](ctx, scale, assets, info, tpl);
+  textAlpha = style.textAlpha;
+  PAINTERS[tpl.id](ctx, scale, assets, info, tpl, style);
+  textAlpha = 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -399,6 +462,13 @@ Page({
     searching: false,
     searchEmpty: false,
     zoom: 12,
+    themes: themes.THEMES.concat([{ id: themes.CUSTOM_ID, name: '自定义', tint: themes.DEFAULT_CUSTOM_HEX }]),
+    mapColorId: themes.DEFAULT_THEME_ID,
+    customHex: themes.DEFAULT_CUSTOM_HEX,
+    customHexText: themes.DEFAULT_CUSTOM_HEX,
+    mapOpacity: 100,
+    photoOpacity: 100,
+    textOpacity: 100,
     canvasStyle: '',
     busy: false,
     busyText: '',
@@ -658,6 +728,49 @@ Page({
     this.setData({ templateId: id }, () => this.render());
   },
 
+  /* ---------------------------- 地图配色 / 不透明度 ---------------------------- */
+
+  onTapTheme(e) {
+    const id = e.currentTarget.dataset.id;
+    if (id === this.data.mapColorId) return;
+    this.setData({ mapColorId: id }, () => this.render());
+  },
+
+  onCustomHexInput(e) {
+    const text = e.detail.value;
+    const hex = themes.parseHex(text);
+    const patch = { customHexText: text };
+    if (hex) {
+      patch.customHex = hex;
+      patch.themes = this.data.themes.map((t) => (t.id === themes.CUSTOM_ID ? Object.assign({}, t, { tint: hex }) : t));
+    }
+    this.setData(patch, () => {
+      if (hex) this.scheduleRender();
+    });
+  },
+
+  onOpacityChanging(e) {
+    this.setData({ [e.currentTarget.dataset.key]: e.detail.value });
+    this.scheduleRender();
+  },
+
+  onOpacityChange(e) {
+    this.setData({ [e.currentTarget.dataset.key]: e.detail.value }, () => this.render());
+  },
+
+  onResetOpacity() {
+    this.setData({ mapOpacity: 100, photoOpacity: 100, textOpacity: 100 }, () => this.render());
+  },
+
+  // 拖动滑块时合并高频更新，避免每一帧都重绘
+  scheduleRender() {
+    if (this._renderTimer) return;
+    this._renderTimer = setTimeout(() => {
+      this._renderTimer = null;
+      this.render();
+    }, 40);
+  },
+
   onZoomChanging(e) {
     this.setData({ zoom: e.detail.value });
   },
@@ -703,7 +816,7 @@ Page({
   /* ---------------------------- 渲染 ---------------------------- */
 
   // 下载当前模板/缩放对应的静态地图，失败时返回 null（画布回退到本地底图）
-  async ensureMapFile(tpl) {
+  async ensureMapFile(tpl, dark) {
     const { lat, lon } = this.poster;
     if (lat === null || lon === null) return null;
     const url = mapService.buildStaticMapUrl({
@@ -712,7 +825,8 @@ Page({
       zoom: this.data.zoom,
       width: tpl.map.width,
       height: tpl.map.height,
-      pin: tpl.map.pin
+      pin: tpl.map.pin,
+      dark
     });
     if (!url) return null;
     if (this._mapCache[url]) return this._mapCache[url];
@@ -730,10 +844,10 @@ Page({
     }
   },
 
-  async loadAssets(canvas, cache, tpl) {
+  async loadAssets(canvas, cache, tpl, style) {
     const [photo, mapPath] = await Promise.all([
       cachedImage(canvas, cache, this.poster.photoPath),
-      this.ensureMapFile(tpl)
+      this.ensureMapFile(tpl, style.theme.dark)
     ]);
     let map = null;
     if (mapPath) {
@@ -744,6 +858,17 @@ Page({
       }
     }
     return { photo, map };
+  },
+
+  // 当前配色与不透明度（0~1）
+  buildStyle() {
+    const d = this.data;
+    return {
+      theme: themes.resolveTheme(d.mapColorId, d.customHex),
+      mapAlpha: d.mapOpacity / 100,
+      photoAlpha: d.photoOpacity / 100,
+      textAlpha: d.textOpacity / 100
+    };
   },
 
   buildInfo() {
@@ -764,15 +889,16 @@ Page({
     const canvas = this.preview;
     const tplId = this.data.templateId;
     const tpl = TEMPLATES.find((t) => t.id === tplId);
+    const style = this.buildStyle();
 
     if (!this.poster.photoPath) {
-      paintPoster(canvas, tplId, null, null);
+      paintPoster(canvas, tplId, null, null, style);
       return;
     }
 
     let assets;
     try {
-      assets = await this.loadAssets(canvas, this._imgCache, tpl);
+      assets = await this.loadAssets(canvas, this._imgCache, tpl, style);
     } catch (e) {
       console.error('load assets failed', e);
       wx.showToast({ title: '图片加载失败', icon: 'none' });
@@ -780,7 +906,7 @@ Page({
     }
     // 期间用户切换了模板/照片：丢弃过期结果
     if (renderId !== this._renderId) return;
-    paintPoster(canvas, tplId, assets, this.buildInfo());
+    paintPoster(canvas, tplId, assets, this.buildInfo(), style);
   },
 
   /* ---------------------------- 导出 ---------------------------- */
@@ -802,8 +928,9 @@ Page({
       const tplId = this.data.templateId;
       const tpl = TEMPLATES.find((t) => t.id === tplId);
       // 离屏画布不复用预览缓存，使用独立的 Image 对象
-      const assets = await this.loadAssets(canvas, null, tpl);
-      paintPoster(canvas, tplId, assets, this.buildInfo());
+      const style = this.buildStyle();
+      const assets = await this.loadAssets(canvas, null, tpl, style);
+      paintPoster(canvas, tplId, assets, this.buildInfo(), style);
 
       const { tempFilePath } = await wxp('canvasToTempFilePath', {
         canvas,

@@ -55,6 +55,7 @@ function centerForPinAt(lat, lon, zoom, width, height, fx, fy) {
  * 拼接 Mapbox Static Images URL：
  * https://api.mapbox.com/styles/v1/{username}/{style_id}/static/pin-s+000({lon},{lat})/{lon},{lat},{zoom},0/{width}x{height}@2x?access_token={token}
  *
+ * dark=true 时使用 darkStyleId。
  * 与固定居中的模板不同，这里允许通过 pin={x,y} 指定定位针在图中的比例位置，
  * 此时中心点会被平移，pin 覆盖层仍使用真实经纬度。
  *
@@ -62,10 +63,11 @@ function centerForPinAt(lat, lon, zoom, width, height, fx, fy) {
  */
 function buildStaticMapUrl(opts) {
   if (!hasToken()) return '';
-  const { lat, lon, zoom = 12, pin, retina = true } = opts;
+  const { lat, lon, zoom = 12, pin, retina = true, dark = false } = opts;
   const width = Math.max(1, Math.min(MAX_STATIC_SIZE, Math.round(opts.width)));
   const height = Math.max(1, Math.min(MAX_STATIC_SIZE, Math.round(opts.height)));
-  const { token, username, styleId } = config.mapbox;
+  const { token, username } = config.mapbox;
+  const styleId = dark ? config.mapbox.darkStyleId : config.mapbox.styleId;
 
   const center = pin ? centerForPinAt(lat, lon, zoom, width, height, pin.x, pin.y) : { lat, lon };
   const marker = `pin-s+000(${lon.toFixed(6)},${lat.toFixed(6)})`;

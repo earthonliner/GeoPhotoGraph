@@ -326,3 +326,103 @@
   font-size: 24rpx;
   color: #9b9a95;
 }
+
+/* 地图配色 */
+.swatches {
+  display: flex;
+  flex-direction: row;
+  white-space: nowrap;
+  margin-top: 24rpx;
+}
+
+.swatch-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-right: 28rpx;
+  flex-shrink: 0;
+}
+
+.swatch {
+  box-sizing: border-box;
+  width: 88rpx;
+  height: 88rpx;
+  border-radius: 50%;
+  border: 2rpx solid rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s;
+}
+
+.swatch-active {
+  border: 4rpx solid #fff;
+  box-shadow: 0 0 0 3rpx #111, 0 8rpx 20rpx rgba(0, 0, 0, 0.18);
+  transform: scale(1.04);
+}
+
+.swatch-custom {
+  border-style: dashed;
+  border-color: #9b9a95;
+}
+
+.swatch-plus {
+  font-size: 36rpx;
+  color: #6f6e6a;
+  line-height: 1;
+}
+
+.swatch-name {
+  margin-top: 12rpx;
+  font-size: 20rpx;
+  color: #9b9a95;
+}
+
+.swatch-name-active {
+  color: #111;
+  font-weight: 600;
+}
+
+.custom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20rpx;
+  padding-top: 20rpx;
+  border-top: 1rpx solid #efeeea;
+}
+
+.custom-input {
+  flex: 1;
+  height: 56rpx;
+  margin-left: 32rpx;
+  text-align: right;
+  font-size: 28rpx;
+  letter-spacing: 3rpx;
+  color: #111;
+}
+
+/* 不透明度 */
+.op-row {
+  display: flex;
+  align-items: center;
+  margin-top: 8rpx;
+}
+
+.op-name {
+  width: 72rpx;
+  font-size: 24rpx;
+  color: #6f6e6a;
+}
+
+.op-slider {
+  flex: 1;
+  margin: 12rpx 16rpx;
+}
+
+.op-value {
+  width: 88rpx;
+  text-align: right;
+  font-size: 22rpx;
+  color: #222;
+}

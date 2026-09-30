@@ -16,7 +16,9 @@ module.exports = {
     token: MAPBOX_TOKEN,
     // 推荐在 Mapbox Studio 中 Duplicate「Monochrome / Light」得到自己的黑白极简样式
     username: 'mapbox',
-    styleId: 'light-v11'
+    styleId: 'light-v11',
+    // 深色主题使用的底图样式（画布上再叠加主题色）
+    darkStyleId: 'dark-v11'
   },
   request: {
     timeout: 10000

@@ -163,3 +163,35 @@ test('map-service: reverse geocode / search use requested language', async () =>
   assert.ok(urls[1].includes('language=en'));
   delete global.wx;
 });
+
+const themes = require('../utils/themes');
+
+test('themes: parseHex accepts 3/6 digit hex with or without #', () => {
+  assert.strictEqual(themes.parseHex('#e8dfd0'), '#E8DFD0');
+  assert.strictEqual(themes.parseHex('abc'), '#AABBCC');
+  assert.strictEqual(themes.parseHex(' #123456 '), '#123456');
+  assert.strictEqual(themes.parseHex('#12345'), null);
+  assert.strictEqual(themes.parseHex('zzzzzz'), null);
+  assert.strictEqual(themes.parseHex(''), null);
+});
+
+test('themes: presets and custom colors resolve dark/light and ink', () => {
+  const paper = themes.resolveTheme('paper');
+  assert.strictEqual(paper.dark, false);
+  assert.strictEqual(paper.ink, '#141414');
+  const midnight = themes.resolveTheme('midnight');
+  assert.strictEqual(midnight.dark, true);
+  assert.strictEqual(midnight.ink, '#F3EFE6');
+  assert.strictEqual(themes.resolveTheme('custom', '#102030').dark, true);
+  assert.strictEqual(themes.resolveTheme('custom', '#F0E0D0').dark, false);
+  assert.strictEqual(themes.resolveTheme('custom', 'nope').tint, themes.DEFAULT_CUSTOM_HEX);
+  assert.strictEqual(themes.hexToRgba('#FF8000', 0.5), 'rgba(255,128,0,0.5)');
+});
+
+test('static map url uses dark style for dark themes', () => {
+  config.mapbox.token = 'pk.test';
+  const light = mapService.buildStaticMapUrl({ lat: 1, lon: 2, width: 100, height: 100 });
+  const dark = mapService.buildStaticMapUrl({ lat: 1, lon: 2, width: 100, height: 100, dark: true });
+  assert.ok(light.includes('/light-v11/'));
+  assert.ok(dark.includes('/dark-v11/'));
+});
