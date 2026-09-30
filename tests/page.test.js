@@ -412,6 +412,13 @@ test('转发：标题带地名，卡片图把整张预览居中放进 5:4，失�
   assert.deepStrictEqual(page.onShareTimeline(), { title: '「ZERMATT」· 用 GEOPICS 做的地图海报' });
   page.poster.place = 'UNKNOWN';
   assert.strictEqual(page.onShareTimeline().title, 'GEOPICS · 把照片与它发生的地方，做成一张海报');
+  page.onPlaceInput({ detail: { value: 'MY TRIP' } });
+  const manual = page.onShareAppMessage();
+  assert.strictEqual(manual.title, 'GEOPICS · 把照片与它发生的地方，做成一张海报', '手动输入的地名不进标题');
+  assert.strictEqual((await manual.promise).title, manual.title);
+  page.onPlaceReset();
+  await sleep(0);
+  assert.strictEqual(page.onShareTimeline().title, '「ZERMATT」· 用 GEOPICS 做的地图海报');
 
   // 弹层打开时 canvas 被截图顶替：直接使用那张截图
   wx.calls.snapshot.length = 0;
@@ -427,7 +434,8 @@ test('转发：标题带地名，卡片图把整张预览居中放进 5:4，失�
   wx.canvasToTempFilePath = (o) => o.fail({ errMsg: 'canvasToTempFilePath:fail' });
   const fallback = await page.onShareAppMessage().promise;
   assert.strictEqual(fallback.imageUrl, undefined);
-  assert.strictEqual(fallback.title, 'GEOPICS · 把照片与它发生的地方，做成一张海报');
+  assert.strictEqual(fallback.title, '「ZERMATT」· 用 GEOPICS 做的地图海报');
+  assert.strictEqual(fallback.path, '/pages/index/index');
 });
 
 test('隐私：拒绝隐私保护指引与拒绝相册权限分别提示', async () => {

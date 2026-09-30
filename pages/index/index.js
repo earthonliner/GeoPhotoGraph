@@ -1511,8 +1511,9 @@ Page({
 
   /* ---------------------------- 转发 ---------------------------- */
 
+  // 标题只使用自动识别的地名：手动输入的文字不经审核，不放进转发给他人的标题
   shareTitle() {
-    const place = this.data.hasPhoto ? (this.poster.place || '').trim() : '';
+    const place = this.data.hasPhoto && !this.poster.placeManual ? (this.poster.place || '').trim() : '';
     if (!place || place === 'UNKNOWN' || place === 'LOCATING…') return SHARE_TITLE;
     return `「${place}」· 用 GEOPICS 做的地图海报`;
   },
