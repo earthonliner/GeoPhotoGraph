@@ -1615,7 +1615,7 @@ Page({
       const show = res.intersectionRatio === 0;
       if (show === shown) return;
       shown = show;
-      wx.setNavigationBarTitle({ title: show ? 'GeoPics' : '' });
+      wx.setNavigationBarTitle({ title: show ? 'GEOPICS' : '' });
     });
   },
 
