@@ -6,7 +6,7 @@
 
   <view class="card">
     <button class="btn btn-primary" hover-class="btn-hover" bindtap="onChoosePhoto">
-      {{hasPhoto ? '重新选择照片' : '选择原图照片'}}
+      {{hasPhoto ? '重新选择照片' : '选择原图照片（可多选）'}}
     </button>
 
     <view wx:if="{{hasPhoto}}" class="meta">
@@ -52,6 +52,45 @@
     </view>
 
     <view wx:else class="hint">请选择带定位信息的原图（相册），将自动读取拍摄地点与日期</view>
+  </view>
+
+  <view wx:if="{{hasPhoto}}" class="card batch">
+    <view class="zoom-head">
+      <text class="meta-label">PHOTOS {{itemCount}}/{{maxBatch}}</text>
+      <view class="batch-links">
+        <text wx:if="{{itemCount < maxBatch}}" class="link" bindtap="onAddPhotos">继续添加</text>
+        <text wx:if="{{itemCount > 1}}" class="link" bindtap="onToggleSelectAll">{{selectedCount === itemCount ? '取消全选' : '全选'}}</text>
+      </view>
+    </view>
+    <scroll-view scroll-x enable-flex class="thumbs" scroll-with-animation scroll-into-view="thumb-{{currentId}}">
+      <view
+        wx:for="{{list}}"
+        wx:key="id"
+        id="thumb-{{item.id}}"
+        class="thumb {{item.current ? 'thumb-current' : ''}}"
+        data-id="{{item.id}}"
+        bindtap="onTapItem"
+      >
+        <image class="thumb-img" src="{{item.path}}" mode="aspectFill" />
+        <view class="thumb-check {{item.selected ? 'thumb-check-on' : ''}}" data-id="{{item.id}}" catchtap="onToggleSelect">
+          <text wx:if="{{item.selected}}" class="thumb-tick">✓</text>
+        </view>
+        <view class="thumb-remove" data-id="{{item.id}}" catchtap="onRemoveItem">×</view>
+        <text wx:if="{{item.noLoc}}" class="thumb-warn">无位置</text>
+        <text class="thumb-tag">{{item.tplName}}</text>
+      </view>
+    </scroll-view>
+    <view wx:if="{{itemCount > 1}}" class="place-tools">
+      <view class="seg">
+        <view class="seg-item {{batchMode === 'unique' ? 'seg-active' : ''}}" data-mode="unique" bindtap="onBatchModeChange">统一模板</view>
+        <view class="seg-item {{batchMode === 'random' ? 'seg-active' : ''}}" data-mode="random" bindtap="onBatchModeChange">随机模板</view>
+      </view>
+      <text wx:if="{{batchMode === 'random'}}" class="link" bindtap="onReshuffle">重新随机</text>
+    </view>
+    <view wx:if="{{itemCount > 1}}" class="crop-tip batch-tip">
+      {{batchMode === 'unique' ? '所有照片使用同一模板，点选下方模板即可统一切换。' : '每张照片使用不同模板；点选缩略图后可单独更换该张的模板。'}}
+      点击缩略图编辑单张，左上角圆点勾选用于下载。
+    </view>
   </view>
 
   <scroll-view scroll-x enable-flex class="tabs" scroll-with-animation scroll-into-view="tab-{{templateId}}">
@@ -189,8 +228,12 @@
   </view>
 
   <button class="btn btn-primary btn-save" hover-class="btn-hover" disabled="{{!hasPhoto || busy}}" bindtap="onSavePoster">
-    保存高清海报
+    {{itemCount > 1 ? '保存当前海报' : '保存高清海报'}}
   </button>
+  <view wx:if="{{itemCount > 1}}" class="save-row">
+    <button class="btn btn-ghost btn-half" hover-class="btn-hover" disabled="{{busy || selectedCount === 0}}" bindtap="onSaveSelected">下载所选（{{selectedCount}}）</button>
+    <button class="btn btn-ghost btn-half" hover-class="btn-hover" disabled="{{busy}}" bindtap="onSaveAll">下载全部（{{itemCount}}）</button>
+  </view>
 
   <view wx:if="{{searchVisible}}" class="sheet-mask" bindtap="onSearchClose">
     <view class="sheet" catchtap="noop">
