@@ -52,7 +52,7 @@
       <text>免费版预览带水印</text>
       <text class="link stage-link" bindtap="onOpenPaywall">解锁无水印高清图</text>
     </view>
-    <text wx:elif="{{hasPhoto && freeLeft > 0}}" class="stage-note">免费额度剩余 {{freeLeft}} 张，每保存一张消耗 1 张</text>
+    <text wx:elif="{{hasPhoto && freeLeft > 0}}" class="stage-note">剩余额度 {{freeLeft}} 张，每保存一张消耗 1 张</text>
     <text wx:if="{{!hasPhoto}}" class="stage-note">选择带定位信息的原图，自动读取拍摄地点与日期</text>
     <text wx:if="{{tokenMissing}}" class="stage-note stage-warn">未配置 Mapbox Token（utils/config.js），当前使用本地简约底图，地名不可用</text>
   </view>
