@@ -22,6 +22,12 @@ const MAX_BATCH = 9;
 const FILM_PHOTO = { left: 68, top: 50, w: 264, h: 368 };
 const POSTCARD_PHOTO = { left: 40, top: 46, w: 320, h: 236 };
 const FULL_PHOTO = { left: 0, top: 0, w: POSTER_W, h: POSTER_H };
+const MAT_PHOTO = { left: 28, top: 28, w: 344, h: 404 };
+const BAR_H = 100;
+const BAR_PHOTO = { left: 0, top: 0, w: POSTER_W, h: POSTER_H - BAR_H };
+const RAIL_W = 64;
+const RAIL_PHOTO = { left: 0, top: 0, w: POSTER_W - RAIL_W, h: POSTER_H };
+const CINEMA_PHOTO = { left: 0, top: 116, w: POSTER_W, h: 260 };
 
 // 支持取景调整（拖动 / 缩放）的模板；拍立得与画廊展签完整显示照片，不需要裁切
 const CROP_REGIONS = {
@@ -31,7 +37,13 @@ const CROP_REGIONS = {
   film: FILM_PHOTO,
   postcard: POSTCARD_PHOTO,
   glass: FULL_PHOTO,
-  typo: FULL_PHOTO
+  typo: FULL_PHOTO,
+  mat: MAT_PHOTO,
+  bar: BAR_PHOTO,
+  frame: FULL_PHOTO,
+  rail: RAIL_PHOTO,
+  cinema: CINEMA_PHOTO,
+  coord: FULL_PHOTO
 };
 const DEFAULT_CROP = { zoom: 1, x: 0, y: 0 };
 
@@ -46,17 +58,40 @@ const TAGLINE = 'CAPTURED MOMENT · LASTING PLACE';
  */
 const MAP_SIZE = { width: 600, height: 800 };
 const CENTER_PIN = { x: 0.5, y: 0.5 };
+const tplMap = (pin) => Object.assign({ pin }, MAP_SIZE);
+
+// category：模板所属分类；hot：同时出现在“热门”分类里
 const TEMPLATES = [
-  { id: 'polaroid', name: '拍立得', map: Object.assign({ pin: { x: 0.88, y: 0.5 } }, MAP_SIZE) },
-  { id: 'split', name: '上下分割', map: Object.assign({ pin: { x: 0.5, y: 0.19 } }, MAP_SIZE) },
-  { id: 'medallion', name: '地图徽章', map: Object.assign({ pin: { x: 0.18, y: 0.846 } }, MAP_SIZE) },
-  { id: 'magazine', name: '杂志封面', map: Object.assign({ pin: CENTER_PIN }, MAP_SIZE) },
-  { id: 'film', name: '胶片', map: Object.assign({ pin: CENTER_PIN }, MAP_SIZE) },
-  { id: 'postcard', name: '明信片', map: Object.assign({ pin: CENTER_PIN }, MAP_SIZE) },
-  { id: 'gallery', name: '画廊展签', map: Object.assign({ pin: { x: 0.9, y: 0.28 } }, MAP_SIZE) },
-  { id: 'glass', name: '玻璃卡片', map: Object.assign({ pin: CENTER_PIN }, MAP_SIZE) },
-  { id: 'typo', name: '巨字', map: Object.assign({ pin: CENTER_PIN }, MAP_SIZE) }
+  { id: 'polaroid', name: '拍立得', category: 'classic', hot: true, map: tplMap({ x: 0.88, y: 0.5 }) },
+  { id: 'split', name: '上下分割', category: 'classic', map: tplMap({ x: 0.5, y: 0.19 }) },
+  { id: 'medallion', name: '地图徽章', category: 'classic', map: tplMap({ x: 0.18, y: 0.846 }) },
+  { id: 'mat', name: '极简白卡', category: 'minimal', hot: true, map: tplMap(CENTER_PIN) },
+  { id: 'bar', name: '底栏', category: 'minimal', hot: true, map: tplMap(CENTER_PIN) },
+  { id: 'frame', name: '细框', category: 'minimal', hot: true, map: tplMap(CENTER_PIN) },
+  { id: 'rail', name: '侧栏', category: 'minimal', map: tplMap(CENTER_PIN) },
+  { id: 'cinema', name: '影幕', category: 'minimal', map: tplMap(CENTER_PIN) },
+  { id: 'coord', name: '坐标', category: 'minimal', map: tplMap(CENTER_PIN) },
+  { id: 'magazine', name: '杂志封面', category: 'editorial', hot: true, map: tplMap(CENTER_PIN) },
+  { id: 'glass', name: '玻璃卡片', category: 'editorial', hot: true, map: tplMap(CENTER_PIN) },
+  { id: 'typo', name: '巨字', category: 'editorial', map: tplMap(CENTER_PIN) },
+  { id: 'film', name: '胶片', category: 'retro', map: tplMap(CENTER_PIN) },
+  { id: 'postcard', name: '明信片', category: 'retro', map: tplMap(CENTER_PIN) },
+  { id: 'gallery', name: '画廊展签', category: 'retro', map: tplMap({ x: 0.9, y: 0.28 }) }
 ];
+
+const HOT_CATEGORY = 'hot';
+const CATEGORIES = [
+  { id: HOT_CATEGORY, name: '热门' },
+  { id: 'minimal', name: '简约' },
+  { id: 'classic', name: '经典' },
+  { id: 'editorial', name: '杂志' },
+  { id: 'retro', name: '复古' }
+];
+
+function templatesOf(categoryId) {
+  return TEMPLATES.filter((t) => (categoryId === HOT_CATEGORY ? t.hot : t.category === categoryId));
+}
+
 
 /* ------------------------------------------------------------------ */
 /* 通用工具                                                             */
@@ -1004,6 +1039,225 @@ function paintTypo(ctx, scale, assets, info, tpl, style) {
   ctx.restore();
 }
 
+/* ------------------------------------------------------------------ */
+/* 简约模板（适合批量）：白卡 / 底栏 / 细框 / 侧栏 / 影幕 / 坐标            */
+/* 版式固定、文字量少，照片方向与地名长短不同也能保持整批统一               */
+/* ------------------------------------------------------------------ */
+
+function splitCoord(info) {
+  const parts = (info.coordText || '').split('  ');
+  return { lat: parts[0] || '', lon: parts[1] || '' };
+}
+
+// 极简白卡：宽边留白，照片下方一行细字说明
+function paintMat(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const ink = style.theme.ink;
+  const p = MAT_PHOTO;
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  withAlpha(ctx, style.photoAlpha, () => {
+    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
+  });
+
+  ctx.textBaseline = 'alphabetic';
+  const baseline = p.top + p.h + 36;
+  ctx.fillStyle = ink;
+  setFont(ctx, 8.5, 500, SANS);
+  const dateW = measureSpaced(ctx, info.dateText, 1.4);
+  fitFontSize(ctx, info.place, W - p.left * 2 - dateW - 24, 17, 9, 700, SANS, 3);
+  drawSpacedText(ctx, info.place, p.left, baseline, 3, 'left');
+  setFont(ctx, 8.5, 500, SANS);
+  ctx.fillStyle = hexToRgba(ink, 0.75);
+  drawSpacedText(ctx, info.dateText, W - p.left, baseline, 1.4, 'right');
+
+  ctx.strokeStyle = hexToRgba(ink, 0.25);
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(p.left, baseline + 14);
+  ctx.lineTo(W - p.left, baseline + 14);
+  ctx.stroke();
+
+  ctx.fillStyle = hexToRgba(ink, 0.6);
+  setFont(ctx, 7.5, 400, SANS);
+  drawSpacedText(ctx, info.coordText, p.left, baseline + 31, 1.2, 'left');
+}
+
+// 底栏：照片通栏，底部一条主题色信息栏，右侧迷你地图
+function paintBar(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const ink = style.theme.ink;
+  const p = BAR_PHOTO;
+  const top = H - BAR_H;
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  withAlpha(ctx, style.photoAlpha, () => {
+    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
+  });
+
+  const ms = 60;
+  const mx = W - 24 - ms;
+  const my = top + (BAR_H - ms) / 2;
+  ctx.save();
+  roundedRectPath(ctx, mx, my, ms, ms, 6);
+  ctx.clip();
+  drawMapWindow(ctx, assets.map, mx, my, ms, ms, tpl, info, style);
+  ctx.restore();
+  ctx.strokeStyle = hexToRgba(ink, 0.3);
+  ctx.lineWidth = 0.6;
+  roundedRectPath(ctx, mx, my, ms, ms, 6);
+  ctx.stroke();
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = ink;
+  fitFontSize(ctx, info.place, mx - 16 - 24, 22, 11, 800, SANS, 2);
+  drawSpacedText(ctx, info.place, 24, top + 42, 2, 'left');
+  ctx.fillStyle = hexToRgba(ink, 0.72);
+  setFont(ctx, 8, 500, SANS);
+  drawSpacedText(ctx, info.coordText, 24, top + 62, 1.1, 'left');
+  drawSpacedText(ctx, info.dateText, 24, top + 78, 1.1, 'left');
+}
+
+// 细框：整幅照片 + 内缩发丝线框，地名居中置于底部
+function paintFrame(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const { main, sub } = photoText(style);
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  drawFullBleedPhoto(ctx, assets, style, 0.2, 0.5);
+
+  const inset = 16;
+  ctx.strokeStyle = sub;
+  ctx.lineWidth = 0.8;
+  ctx.strokeRect(inset, inset, W - inset * 2, H - inset * 2);
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = sub;
+  setFont(ctx, 7.5, 500, SANS);
+  drawSpacedText(ctx, info.dateText, W / 2, inset + 26, 4, 'center');
+
+  ctx.fillStyle = main;
+  fitFontSize(ctx, info.place, W - 96, 30, 13, 300, SANS, 8);
+  drawSpacedText(ctx, info.place, W / 2, H - 78, 8, 'center');
+
+  ctx.strokeStyle = sub;
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(W / 2 - 14, H - 64);
+  ctx.lineTo(W / 2 + 14, H - 64);
+  ctx.stroke();
+
+  ctx.fillStyle = sub;
+  setFont(ctx, 7.5, 400, SANS);
+  drawSpacedText(ctx, info.coordText, W / 2, H - 46, 2.4, 'center');
+}
+
+// 侧栏：左侧照片，右侧细长主题色栏，竖排地名从下往上阅读，顶部圆形迷你地图
+function paintRail(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const ink = style.theme.ink;
+  const p = RAIL_PHOTO;
+  const cx = W - RAIL_W / 2;
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  withAlpha(ctx, style.photoAlpha, () => {
+    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
+  });
+
+  const r = 17;
+  const my = 42;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, my, r, 0, Math.PI * 2);
+  ctx.clip();
+  drawMapWindow(ctx, assets.map, cx - r, my - r, r * 2, r * 2, tpl, info, style);
+  ctx.restore();
+  ctx.strokeStyle = hexToRgba(ink, 0.35);
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.arc(cx, my, r, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.save();
+  ctx.translate(cx - 3, H - 30);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textBaseline = 'alphabetic';
+  const maxW = H - 30 - (my + r + 24);
+  ctx.fillStyle = ink;
+  fitFontSize(ctx, info.place, maxW, 20, 10, 800, SANS, 3);
+  drawSpacedText(ctx, info.place, 0, -4, 3, 'left');
+  ctx.fillStyle = hexToRgba(ink, 0.72);
+  setFont(ctx, 7.5, 500, SANS);
+  drawSpacedText(ctx, info.coordText, 0, 12, 1.2, 'left');
+  drawSpacedText(ctx, info.dateText, 0, 24, 1.2, 'left');
+  ctx.restore();
+}
+
+// 影幕：宽银幕画幅，上下留出主题色黑边，字幕式地名
+function paintCinema(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const ink = style.theme.ink;
+  const p = CINEMA_PHOTO;
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  withAlpha(ctx, style.photoAlpha, () => {
+    drawImageCover(ctx, assets.photo, p.left, p.top, p.w, p.h, style.crop);
+  });
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = hexToRgba(ink, 0.6);
+  setFont(ctx, 7, 500, SANS);
+  drawSpacedText(ctx, info.dateText, 24, p.top - 18, 3, 'left');
+  drawSpacedText(ctx, 'LOCATION', W - 24, p.top - 18, 3.4, 'right');
+
+  const bottom = p.top + p.h;
+  ctx.fillStyle = ink;
+  fitFontSize(ctx, info.place, W - 64, 34, 14, 300, SANS, 9);
+  drawSpacedText(ctx, info.place, W / 2, bottom + 62, 9, 'center');
+  ctx.fillStyle = hexToRgba(ink, 0.65);
+  setFont(ctx, 7.5, 400, SANS);
+  drawSpacedText(ctx, info.coordText, W / 2, bottom + 88, 2.6, 'center');
+}
+
+// 坐标：整幅照片 + 四角测绘标记，经纬度作为主视觉
+function paintCoord(ctx, scale, assets, info, tpl, style) {
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const { main, sub } = photoText(style);
+  const { lat, lon } = splitCoord(info);
+
+  drawMapRegion(ctx, assets.map, 0, 0, W, H, tpl, info, style);
+  drawFullBleedPhoto(ctx, assets, style, 0.22, 0.62);
+
+  const m = 20;
+  const t = 12;
+  ctx.strokeStyle = sub;
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  [[m, m, 1, 1], [W - m, m, -1, 1], [m, H - m, 1, -1], [W - m, H - m, -1, -1]].forEach(([x, y, dx, dy]) => {
+    ctx.moveTo(x + dx * t, y);
+    ctx.lineTo(x, y);
+    ctx.lineTo(x, y + dy * t);
+  });
+  ctx.stroke();
+
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = sub;
+  setFont(ctx, 7.5, 500, SANS);
+  drawSpacedText(ctx, info.place, m + 10, m + 24, 3, 'left');
+  drawSpacedText(ctx, info.dateText, W - m - 10, m + 24, 1.6, 'right');
+
+  ctx.fillStyle = main;
+  const size = fitFontSize(ctx, lon.length > lat.length ? lon : lat, W - 2 * (m + 10), 30, 14, 200, SANS, 2);
+  drawSpacedText(ctx, lat, m + 10, H - m - 34 - size * 1.15, 2, 'left');
+  drawSpacedText(ctx, lon, m + 10, H - m - 34, 2, 'left');
+}
+
 function paintEmpty(ctx) {
   const W = POSTER_W;
   const H = POSTER_H;
@@ -1030,7 +1284,13 @@ const PAINTERS = {
   postcard: paintPostcard,
   gallery: paintGallery,
   glass: paintGlass,
-  typo: paintTypo
+  typo: paintTypo,
+  mat: paintMat,
+  bar: paintBar,
+  frame: paintFrame,
+  rail: paintRail,
+  cinema: paintCinema,
+  coord: paintCoord
 };
 
 /**
@@ -1061,14 +1321,16 @@ function paintPoster(canvas, tplId, assets, info, style) {
 /* Page                                                                 */
 /* ------------------------------------------------------------------ */
 
-// 随机模板：用完一轮全部模板再开始下一轮
-function pickRandomTemplates(count) {
-  return batchUtil.pickRandomTemplates(TEMPLATES.map((t) => t.id), count);
+// 随机模板：在当前分类内洗牌发牌，用完一轮再开始下一轮
+function pickRandomTemplates(count, categoryId) {
+  return batchUtil.pickRandomTemplates(templatesOf(categoryId).map((t) => t.id), count);
 }
 
 Page({
   data: {
-    templates: TEMPLATES,
+    categories: CATEGORIES,
+    catId: HOT_CATEGORY,
+    visibleTemplates: templatesOf(HOT_CATEGORY),
     templateId: 'polaroid',
     hasPhoto: false,
     photoPath: '',
@@ -1308,12 +1570,13 @@ Page({
 
     this.items = append ? this.items.concat(created) : created;
     if (this.data.batchMode === 'random' && this.items.length > 1) {
-      pickRandomTemplates(created.length).forEach((id, i) => {
+      pickRandomTemplates(created.length, this.data.catId).forEach((id, i) => {
         created[i].templateId = id;
       });
     }
     this.poster = created[0];
     this._imgCache = new Map();
+    this.ensureCategory();
     this.syncView();
     this.render();
 
@@ -1358,6 +1621,7 @@ Page({
     const item = this.findItem(e.currentTarget.dataset.id);
     if (!item || item === this.poster) return;
     this.poster = item;
+    this.ensureCategory();
     this.syncView();
     this.render();
   },
@@ -1386,6 +1650,7 @@ Page({
     this._imgCache.delete(item.photoPath);
     if (item === this.poster) {
       this.poster = this.items[Math.min(idx, this.items.length - 1)] || this.createItem('', item.templateId);
+      this.ensureCategory();
       this.syncView();
       this.render();
     } else {
@@ -1403,12 +1668,28 @@ Page({
     });
   },
 
+  // 当前照片的模板不在正在浏览的分类里时，切到它所属的分类，保证 Tab 上能看到选中项
+  ensureCategory() {
+    const tpl = TEMPLATES.find((t) => t.id === this.poster.templateId);
+    if (!tpl || templatesOf(this.data.catId).some((t) => t.id === tpl.id)) return;
+    this.setData({ catId: tpl.category, visibleTemplates: templatesOf(tpl.category) });
+  },
+
+  onTapCategory(e) {
+    const catId = e.currentTarget.dataset.id;
+    if (catId === this.data.catId) return;
+    this.setData({ catId, visibleTemplates: templatesOf(catId) }, () => {
+      // 随机模式的抽取范围就是当前分类
+      if (this.data.batchMode === 'random' && this.items.length > 1) this.reshuffle();
+    });
+  },
+
   onReshuffle() {
     this.reshuffle();
   },
 
   reshuffle() {
-    pickRandomTemplates(this.items.length).forEach((id, i) => {
+    pickRandomTemplates(this.items.length, this.data.catId).forEach((id, i) => {
       this.items[i].templateId = id;
     });
     this.syncView();

@@ -94,14 +94,24 @@
       <text wx:if="{{batchMode === 'random'}}" class="link" bindtap="onReshuffle">重新随机</text>
     </view>
     <view wx:if="{{itemCount > 1}}" class="crop-tip batch-tip">
-      {{batchMode === 'unique' ? '所有照片使用同一模板，点选下方模板即可统一切换。' : '每张照片使用不同模板；点选缩略图后可单独更换该张的模板。'}}
+      {{batchMode === 'unique' ? '所有照片使用同一模板，点选下方模板即可统一切换。' : '每张照片使用不同模板（在当前分类内随机）；点选缩略图后可单独更换该张的模板。'}}
       点击缩略图编辑单张，左上角圆点勾选用于下载。
     </view>
   </view>
 
+  <scroll-view scroll-x enable-flex class="cats">
+    <view
+      wx:for="{{categories}}"
+      wx:key="id"
+      class="cat {{item.id === catId ? 'cat-active' : ''}} {{item.id === 'hot' ? 'cat-hot' : ''}}"
+      data-id="{{item.id}}"
+      bindtap="onTapCategory"
+    >{{item.name}}</view>
+  </scroll-view>
+
   <scroll-view scroll-x enable-flex class="tabs" scroll-with-animation scroll-into-view="tab-{{templateId}}">
     <view
-      wx:for="{{templates}}"
+      wx:for="{{visibleTemplates}}"
       wx:key="id"
       id="tab-{{item.id}}"
       class="tab {{item.id === templateId ? 'tab-active' : ''}}"
