@@ -299,6 +299,18 @@ test('membership: plans, prices and quota packs', () => {
   assert.ok(m.packLines(s2, plans, now)[0].startsWith('月度会员 剩余 100/120 张'));
 });
 
+test('membership: short capsule label for the header', () => {
+  const m = require('../utils/membership');
+  const month = config.membership.plans.find((p) => p.id === 'month');
+  const now = Date.UTC(2026, 8, 30);
+  const free = { invite: false, bought: false, packs: [] };
+  assert.strictEqual(m.chipLabel(free, now), '开通会员');
+  assert.strictEqual(m.chipLabel({ invite: true, bought: false, packs: [] }, now), '会员');
+  const paid = m.consume(m.addPack(free, month, now), 3, now);
+  assert.strictEqual(m.chipLabel(paid, now), '会员 · 117 张');
+  assert.strictEqual(m.chipLabel(paid, now + 31 * m.DAY), '续购会员');
+});
+
 test('membership: state persists through storage and ignores garbage', () => {
   const m = require('../utils/membership');
   const data = {};
