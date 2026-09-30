@@ -5,8 +5,10 @@ const config = require('../utils/config');
 const { createWx, createPage, tap } = require('./helpers/page-env');
 
 const MODE = config.payment.mode;
+const IOS_PURCHASE = config.payment.iosPurchase;
 test.afterEach(() => {
   config.payment.mode = MODE;
+  config.payment.iosPurchase = IOS_PURCHASE;
 });
 
 function load(overrides) {
@@ -45,7 +47,8 @@ test('帮助页：安卓正式版列出价格、云端权益、隐私说明与�
   assert.ok(page.data.faqs.every((f) => !f.open));
 });
 
-test('帮助页：iOS 不出现价格与购买引导', () => {
+test('帮助页：iOS 关闭购买入口时不出现价格与购买引导', () => {
+  config.payment.iosPurchase = false;
   const { page } = load({ getDeviceInfo: () => ({ platform: 'ios' }) });
   assert.ok(!/¥|开通|购买|收费|买断|月度|年度/.test(allText(page)));
   assert.ok(answer(page, '免费额度怎么计算？').endsWith('其余模板的预览带水印、不能下载。'));

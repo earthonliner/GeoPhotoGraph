@@ -139,6 +139,16 @@ function grantSingle(user, single) {
   return { singles: cleanCount(user.singles) + single.quota };
 }
 
+// 退款后收回该订单发放的权益（额度包 / 买断记录 / 单张额度），bought 保持不变
+function revokeOrder(user, order) {
+  if (order.kind === 'plan') return { packs: (user.packs || []).map(cleanPack).filter((p) => p.orderId !== order._id) };
+  if (order.kind === 'lifetime') {
+    const l = cleanLifetime(user.lifetime);
+    return l && l.orderId === order._id ? { lifetime: null } : {};
+  }
+  return { singles: Math.max(0, cleanCount(user.singles) - 1) };
+}
+
 // 返回给小程序的权益快照：不含 charged 等内部字段
 function publicState(user, now) {
   const l = cleanLifetime(user.lifetime);
@@ -167,5 +177,6 @@ module.exports = {
   grantPlan,
   grantLifetime,
   grantSingle,
+  revokeOrder,
   publicState
 };

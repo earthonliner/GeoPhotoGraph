@@ -58,12 +58,13 @@ module.exports = {
   },
   payment: {
     // 'mock'：开发调试，弹窗确认后直接视为支付成功（不产生任何扣款），权益只存本地
-    // 'cloud'：微信云开发 + 云支付。下单、入账、额度扣减、邀请码都在云函数 api 里完成，
+    // 'cloud'：微信云开发。下单、入账、额度扣减、邀请码都在云函数 api 里完成，
     //          小程序端只保存服务端返回的权益快照。部署步骤见 README「接入微信支付」
     mode: 'cloud',
-    // iOS 端是否显示购买入口。平台规范不允许 iOS 小程序内直接售卖虚拟商品，默认关闭：
-    // iOS 只展示已有权益、免费额度与邀请码兑换。接入合规的 iOS 支付方案后再改为 true
-    iosPurchase: false,
+    // iOS 端是否显示购买入口。云函数使用虚拟支付（PAY_CHANNEL 默认值 virtual）时，iOS 会走 Apple 支付，
+    // 合规，保持 true。虚拟支付尚未开通、或云函数改用 jsapi（云支付）时必须改为 false：
+    // 此时 iOS 只展示已有权益、免费额度与邀请码兑换
+    iosPurchase: true,
     // env：云开发环境 ID；api：云函数名
     cloud: { env: 'cloud1-d0gjjjk1y3ed016f0', api: 'api' },
     // 支付完成后向服务端确认到账的次数与间隔（回调可能稍有延迟）

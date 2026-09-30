@@ -13,8 +13,8 @@ function steps() {
   ];
 }
 
-// canPurchase 为 false（iOS）时不出现价格与购买引导；cloud 模式下权益在云端，换机不丢
-function faqs(canPurchase, cloud) {
+// canPurchase 为 false（iOS 且未开通购买）时不出现价格与购买引导；cloud 模式下权益在云端，换机不丢
+function faqs(canPurchase, cloud, ios) {
   const { free, plans, lifetime, single } = config.membership;
   const list = [
     {
@@ -56,6 +56,12 @@ function faqs(canPurchase, cloud) {
       a:
         `${planText}；${lifetime.name} ${membership.formatPrice(lifetime.price)}，一次买断、永久有效，每月可保存 ${lifetime.monthly} 张，次月 1 日重置、不累计；` +
         `也可以 ${membership.formatPrice(single.price)} 单独解锁一张（不含批量）。月度和年度会员可以重复购买，额度叠加使用，到期后未用完的额度失效。`
+    });
+  }
+  if (canPurchase && ios) {
+    list.push({
+      q: 'iOS 上购买后如何退款？',
+      a: 'iOS 上的购买由 Apple 收款并结算，退款需要在 Apple 的「报告问题」页面（reportaproblem.apple.com）申请。Apple 批准退款后，对应的会员额度会自动收回。'
     });
   }
   if (cloud) {
@@ -102,7 +108,7 @@ Page({
     const cloud = !payment.isMock();
     this.setData({
       steps: steps(),
-      faqs: faqs(platform.canPurchase(), cloud),
+      faqs: faqs(platform.canPurchase(), cloud, platform.platform() === 'ios'),
       privacy: privacyNotes(cloud),
       privacyContract: typeof wx.openPrivacyContract === 'function',
       version: versionText()

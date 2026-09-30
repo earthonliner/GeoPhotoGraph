@@ -2,6 +2,7 @@
  * wx-server-sdk 的内存替身，只实现 cloudfunctions/api 用到的部分：
  * database().collection().doc().get/set/update、add、where().orderBy().limit().get、runTransaction，
  * 以及 cloudPay.unifiedOrder / queryOrder、getWXContext。
+ * 微信侧的“已支付流水”用 ledger（商户订单号 -> 金额，分）表示：云支付 queryOrder 默认按它返回。
  * runTransaction 在快照上执行，回调成功才提交，抛错则整体回滚。
  */
 function clone(v) {
@@ -10,6 +11,7 @@ function clone(v) {
 
 function createFakeCloud(options = {}) {
   let store = {};
+  const ledger = options.ledger || {};
   const calls = { unifiedOrder: [], queryOrder: [] };
   const pay = {
     unifiedOrder: options.unifiedOrder || null,
@@ -99,6 +101,10 @@ function createFakeCloud(options = {}) {
       async queryOrder(params) {
         calls.queryOrder.push(params);
         if (pay.queryOrder) return pay.queryOrder(params);
+        const fee = ledger[params.out_trade_no];
+        if (fee !== undefined) {
+          return { returnCode: 'SUCCESS', resultCode: 'SUCCESS', tradeState: 'SUCCESS', totalFee: fee, transactionId: `wx-${params.out_trade_no}` };
+        }
         return { returnCode: 'SUCCESS', resultCode: 'SUCCESS', tradeState: 'NOTPAY' };
       }
     }
@@ -107,6 +113,7 @@ function createFakeCloud(options = {}) {
   return {
     cloud,
     calls,
+    ledger,
     setOpenid: (id) => { openid = id; },
     setQueryOrder: (fn) => { pay.queryOrder = fn; },
     setUnifiedOrder: (fn) => { pay.unifiedOrder = fn; },
