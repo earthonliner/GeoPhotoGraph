@@ -17,17 +17,29 @@ function setup(extraEnv, clock) {
   return { fake, main, advance: (ms) => { t += ms; } };
 }
 
+// 服务端一次最多接受 20 项：按批发送 n 个同模板的保存请求，返回最后一批的结果
+async function consumeMany(main, prefix, n, tpl) {
+  let last = null;
+  for (let done = 0; done < n; done += 20) {
+    const items = Array.from({ length: Math.min(20, n - done) }, (_, i) => ({ key: `${prefix}${done + i}`, tpl }));
+    last = await main({ action: 'consume', items });
+    if (!last.ok) return last;
+  }
+  return last;
+}
+
 // 模拟微信在用户支付成功后向云函数发送的结果通知
 const notify = (orderId, totalFee, extra) =>
   Object.assign({ returnCode: 'SUCCESS', resultCode: 'SUCCESS', outTradeNo: orderId, totalFee, transactionId: `wx-${orderId}` }, extra);
 
-test('catalog: server prices, quotas and free quota match the mini program config', () => {
-  const { plans, single, freeQuota } = config.membership;
-  assert.strictEqual(catalog.freeQuota, freeQuota);
+test('catalog: server prices, quotas and free tier match the mini program config', () => {
+  const { plans, single, lifetime, free } = config.membership;
+  assert.deepStrictEqual(catalog.free, free);
   for (const p of plans) {
     assert.deepStrictEqual(catalog.plans[p.id], { id: p.id, name: p.name, price: p.price, days: p.days, quota: p.quota });
   }
   assert.strictEqual(Object.keys(catalog.plans).length, plans.length);
+  assert.deepStrictEqual(catalog.lifetime, { id: lifetime.id, name: lifetime.name, price: lifetime.price, monthly: lifetime.monthly });
   assert.strictEqual(catalog.single.price, single.price);
   assert.strictEqual(catalog.single.name, single.name);
   assert.strictEqual(catalog.single.quota, 1);
@@ -37,47 +49,113 @@ test('quota: server charging order matches the client membership rules', () => {
   let seed = 7;
   const rnd = (n) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
   const plans = { month: catalog.plans.month, year: catalog.plans.year };
-  for (let i = 0; i < 300; i += 1) {
+  const templates = ['polaroid', 'polaroid', 'magazine', 'arch', 'unknown-template'];
+  let affordable = 0;
+  let refused = 0;
+  for (let i = 0; i < 600; i += 1) {
+    const t = NOW + rnd(70) * serverQuota.DAY;
     let user = serverQuota.newUser(NOW);
-    user.freeUsed = rnd(3);
+    const monthNow = serverQuota.monthKey(t);
+    user.freeMonth = ['', monthNow, '2020-01'][rnd(3)];
+    user.freeUsed = rnd(12);
     user.singles = rnd(3);
-    user.packs = [];
+    if (rnd(2)) {
+      user = Object.assign(user, serverQuota.grantLifetime(user, catalog.lifetime, 'lt', NOW));
+      user.lifetime.month = [monthNow, '2020-01'][rnd(2)];
+      user.lifetime.used = rnd(catalog.lifetime.monthly + 1);
+    }
     const packCount = rnd(3);
     for (let k = 0; k < packCount; k += 1) {
       const plan = rnd(2) ? plans.month : plans.year;
       user = Object.assign(user, serverQuota.grantPlan(user, plan, `o${k}`, NOW + rnd(5) * serverQuota.DAY));
       user.packs[user.packs.length - 1].used = rnd(plan.quota + 1);
     }
-    const n = 1 + rnd(6);
-    const t = NOW + rnd(40) * serverQuota.DAY;
-    const clientState = membership.normalize(user);
-    assert.strictEqual(serverQuota.available(user, catalog.freeQuota, t), membership.availableQuota(clientState, t));
-    const a = serverQuota.consume(user, n, catalog.freeQuota, t);
-    const b = membership.consume(clientState, n, t);
+    const tpls = Array.from({ length: 1 + rnd(6) }, () => templates[rnd(templates.length)]);
+    const client = membership.normalize(user);
+
+    assert.strictEqual(serverQuota.freeRemaining(user, catalog.free, t), membership.freeRemaining(client, t));
+    assert.strictEqual(serverQuota.paidRemaining(user, t), membership.paidRemaining(client, t));
+    const freeWanted = tpls.filter(membership.isFreeTemplate).length;
+    const useFree = Math.min(freeWanted, membership.freeRemaining(client, t));
+    const clientOk = tpls.length - useFree <= membership.paidRemaining(client, t);
+    assert.strictEqual(serverQuota.available(user, tpls, catalog.free, t), clientOk);
+    if (!clientOk) { refused += 1; continue; }
+    affordable += 1;
+
+    const a = serverQuota.consume(user, tpls, catalog.free, t);
+    const b = membership.consume(client, tpls, t);
+    assert.strictEqual(a.freeMonth || '', b.freeMonth);
     assert.strictEqual(a.freeUsed, b.freeUsed);
     assert.strictEqual(a.singles, b.singles);
+    assert.deepStrictEqual(a.lifetime && [a.lifetime.month, a.lifetime.used], b.lifetime && [b.lifetime.month, b.lifetime.used]);
     assert.deepStrictEqual(a.packs.map((p) => p.used), b.packs.map((p) => p.used));
   }
+  assert.ok(affordable > 100 && refused > 50, `both outcomes are exercised (${affordable}/${refused})`);
 });
 
-test('api: new users start with the free quota and consuming is idempotent per key', async () => {
+test('api: new users start on the free tier; consuming is per key and template-aware', async () => {
   const { main } = setup();
   const first = await main({ action: 'getEntitlement' });
-  assert.deepStrictEqual(first, { ok: true, state: { invite: false, bought: false, freeUsed: 0, singles: 0, packs: [] } });
+  assert.deepStrictEqual(first, { ok: true, state: { invite: false, bought: false, freeMonth: '', freeUsed: 0, singles: 0, lifetime: null, packs: [] } });
+  const save = (key, tpl) => main({ action: 'consume', items: [{ key, tpl }] });
 
-  const a1 = await main({ action: 'consume', keys: ['s1:1'] });
-  assert.ok(a1.ok); assert.strictEqual(a1.state.freeUsed, 1);
-  const again = await main({ action: 'consume', keys: ['s1:1'] });
+  const a1 = await save('s1:1:polaroid', 'polaroid');
+  assert.ok(a1.ok); assert.strictEqual(a1.state.freeUsed, 1); assert.strictEqual(a1.state.freeMonth, '2026-09');
+  const again = await save('s1:1:polaroid', 'polaroid');
   assert.ok(again.ok); assert.strictEqual(again.state.freeUsed, 1, 'same key is not charged twice');
-  const a2 = await main({ action: 'consume', keys: ['s1:2'] });
-  assert.ok(a2.ok); assert.strictEqual(a2.state.freeUsed, 2);
-  const a3 = await main({ action: 'consume', keys: ['s1:3'] });
-  assert.strictEqual(a3.ok, false); assert.strictEqual(a3.code, 'insufficient'); assert.strictEqual(a3.state.freeUsed, 2);
+  for (let i = 2; i <= 10; i += 1) assert.ok((await save(`s1:${i}:polaroid`, 'polaroid')).ok);
+  const a11 = await save('s1:11:polaroid', 'polaroid');
+  assert.strictEqual(a11.ok, false); assert.strictEqual(a11.code, 'insufficient'); assert.strictEqual(a11.state.freeUsed, 10);
   // 已计费的 key 额度用完后仍可重试
-  assert.ok((await main({ action: 'consume', keys: ['s1:2'] })).ok);
-  for (const bad of [[], [''], null, Array.from({ length: 30 }, (_, i) => `k${i}`)]) {
-    assert.strictEqual((await main({ action: 'consume', keys: bad })).code, 'bad_request');
+  assert.ok((await save('s1:2:polaroid', 'polaroid')).ok);
+  for (const bad of [[], [{ key: '' }], [{ tpl: 'polaroid' }], null, Array.from({ length: 30 }, (_, i) => ({ key: `k${i}`, tpl: 'polaroid' }))]) {
+    assert.strictEqual((await main({ action: 'consume', items: bad })).code, 'bad_request');
   }
+  assert.strictEqual((await main({ action: 'consume', keys: ['legacy'] })).code, 'bad_request', 'old payload shape is rejected');
+});
+
+test('api: only the free template uses the free quota; other templates need paid quota', async () => {
+  const { main, fake } = setup();
+  const save = (key, tpl) => main({ action: 'consume', items: [{ key, tpl }] });
+  for (const tpl of ['magazine', 'arch', 'unknown-template', '']) {
+    const r = await save(`k-${tpl}`, tpl);
+    assert.strictEqual(r.ok, false, `${tpl || 'empty'} template`); assert.strictEqual(r.code, 'insufficient');
+  }
+  assert.strictEqual(fake.dump().users['openid-a'].freeUsed, 0, 'refused saves cost nothing');
+
+  // 同一张照片换模板再保存会重新计费：免费的拍立得不能“洗”成付费模板
+  const order = await main({ action: 'createOrder', kind: 'single' });
+  await main(notify(order.orderId, 129));
+  assert.ok((await save('photo1:polaroid', 'polaroid')).ok);
+  assert.strictEqual((await save('photo1:magazine', 'magazine')).ok, true, 'single credit covers the paid template');
+  assert.strictEqual((await save('photo1:arch', 'arch')).code, 'insufficient');
+  const st = (await main({ action: 'getEntitlement' })).state;
+  assert.deepStrictEqual([st.freeUsed, st.singles], [1, 0]);
+});
+
+test('api: a multi-item consume is all-or-nothing and spends free quota first', async () => {
+  const { main, fake } = setup();
+  const order = await main({ action: 'createOrder', kind: 'plan', planId: 'month' });
+  await main(notify(order.orderId, 1490));
+  fake.patch('users', 'openid-a', { freeMonth: '2026-09', freeUsed: 9 });
+  const r = await main({ action: 'consume', items: [{ key: 'a', tpl: 'polaroid' }, { key: 'b', tpl: 'polaroid' }, { key: 'c', tpl: 'magazine' }] });
+  assert.ok(r.ok);
+  assert.deepStrictEqual([r.state.freeUsed, r.state.packs[0].used], [10, 2]);
+
+  const none = setup();
+  const refused = await none.main({ action: 'consume', items: [{ key: 'x', tpl: 'polaroid' }, { key: 'y', tpl: 'magazine' }] });
+  assert.strictEqual(refused.code, 'insufficient');
+  assert.strictEqual(none.fake.dump().users['openid-a'].freeUsed, 0, 'nothing charged when one item cannot be covered');
+});
+
+test('api: the free quota resets on the first of each month (Beijing time)', async () => {
+  let clock = Date.UTC(2026, 8, 30, 15, 0, 0);
+  const { main } = setup({}, () => clock);
+  for (let i = 0; i < 10; i += 1) assert.ok((await main({ action: 'consume', items: [{ key: `a${i}`, tpl: 'polaroid' }] })).ok);
+  assert.strictEqual((await main({ action: 'consume', items: [{ key: 'a10', tpl: 'polaroid' }] })).code, 'insufficient');
+  clock = Date.UTC(2026, 8, 30, 16, 0, 0);
+  const r = await main({ action: 'consume', items: [{ key: 'b0', tpl: 'polaroid' }] });
+  assert.ok(r.ok); assert.deepStrictEqual([r.state.freeMonth, r.state.freeUsed], ['2026-10', 1]);
 });
 
 test('api: requests need a wx identity and a known action', async () => {
@@ -90,7 +168,7 @@ test('api: requests need a wx identity and a known action', async () => {
 
 test('api: createOrder prices come from the server catalog', async () => {
   const { main, fake } = setup();
-  assert.strictEqual((await main({ action: 'createOrder', kind: 'plan', planId: 'lifetime' })).code, 'bad_request');
+  assert.strictEqual((await main({ action: 'createOrder', kind: 'plan', planId: 'lifetime' })).code, 'bad_request', 'lifetime is its own kind');
   assert.strictEqual((await main({ action: 'createOrder', kind: 'gift' })).code, 'bad_request');
 
   const noMch = setup({ SUB_MCH_ID: '' });
@@ -144,7 +222,7 @@ test('api: notifications with a wrong amount, unknown order or failure grant not
   assert.strictEqual(fake.dump().users['openid-a'].packs.length, 0);
 });
 
-test('api: single unlock adds one save, spent after free quota and before packs', async () => {
+test('api: single unlock adds one save, spent last and without membership perks', async () => {
   const { main } = setup();
   const { orderId } = await main({ action: 'createOrder', kind: 'single' });
   await main(notify(orderId, 129));
@@ -153,18 +231,58 @@ test('api: single unlock adds one save, spent after free quota and before packs'
   let state = (await main({ action: 'getEntitlement' })).state;
   assert.strictEqual(state.singles, 1); assert.strictEqual(state.bought, true);
 
-  for (const k of ['a', 'b']) await main({ action: 'consume', keys: [k] });
+  for (const k of ['a', 'b']) await main({ action: 'consume', items: [{ key: k, tpl: 'polaroid' }] });
   state = (await main({ action: 'getEntitlement' })).state;
-  assert.deepStrictEqual([state.freeUsed, state.singles, state.packs[0].used], [2, 1, 0]);
-  state = (await main({ action: 'consume', keys: ['c'] })).state;
-  assert.deepStrictEqual([state.singles, state.packs[0].used], [0, 0], 'single credit first');
-  state = (await main({ action: 'consume', keys: ['d'] })).state;
-  assert.strictEqual(state.packs[0].used, 1);
+  assert.deepStrictEqual([state.freeUsed, state.singles, state.packs[0].used], [2, 1, 0], 'free polaroid quota first');
+  state = (await main({ action: 'consume', items: [{ key: 'c', tpl: 'magazine' }] })).state;
+  assert.deepStrictEqual([state.singles, state.packs[0].used], [1, 1], 'pack before the single credit');
+  assert.ok((await consumeMany(main, 'bulk', 119, 'magazine')).ok);
+  state = (await main({ action: 'consume', items: [{ key: 'd', tpl: 'magazine' }] })).state;
+  assert.deepStrictEqual([state.singles, state.packs[0].used], [0, 120], 'single credit is used once packs are empty');
 
   const onlySingle = setup();
   const o = await onlySingle.main({ action: 'createOrder', kind: 'single' });
   await onlySingle.main(notify(o.orderId, 129));
   assert.strictEqual((await onlySingle.main({ action: 'getEntitlement' })).state.bought, false, 'single does not make a member');
+});
+
+test('api: lifetime purchase grants a monthly quota that resets, and can only be bought once', async () => {
+  let clock = NOW;
+  const { main, fake } = setup({}, () => clock);
+  const order = await main({ action: 'createOrder', kind: 'lifetime' });
+  assert.ok(order.ok);
+  assert.strictEqual(fake.calls.unifiedOrder[0].totalFee, 29900);
+  assert.strictEqual(fake.dump().orders[order.orderId].kind, 'lifetime');
+  await main(notify(order.orderId, 1490));
+  assert.strictEqual((await main({ action: 'getEntitlement' })).state.lifetime, null, 'wrong amount grants nothing');
+  await main(notify(order.orderId, 29900));
+  await main(notify(order.orderId, 29900));
+  let state = (await main({ action: 'getEntitlement' })).state;
+  assert.deepStrictEqual(state.lifetime, { planId: 'lifetime', quota: 120, month: '2026-09', used: 0 });
+  assert.strictEqual(state.bought, true); assert.deepStrictEqual(state.packs, []);
+
+  const again = await main({ action: 'createOrder', kind: 'lifetime' });
+  assert.deepStrictEqual([again.ok, again.code], [false, 'already_owned']);
+
+  assert.ok((await consumeMany(main, 'a', 120, 'magazine')).ok);
+  assert.strictEqual((await consumeMany(main, 'b', 1, 'magazine')).code, 'insufficient', 'monthly limit reached');
+  clock = Date.UTC(2026, 9, 1, 0, 30);
+  state = (await consumeMany(main, 'c', 5, 'magazine')).state;
+  assert.deepStrictEqual([state.lifetime.month, state.lifetime.used], ['2026-10', 5], 'new month, fresh quota, nothing carried over');
+  clock = Date.UTC(2030, 0, 15);
+  assert.ok((await consumeMany(main, 'd', 1, 'magazine')).ok, 'lifetime never expires');
+});
+
+test('api: paying twice for a lifetime plan keeps the existing record', async () => {
+  const { main } = setup();
+  const first = await main({ action: 'createOrder', kind: 'lifetime' });
+  const second = await main({ action: 'createOrder', kind: 'lifetime' });
+  await main(notify(first.orderId, 29900));
+  await main({ action: 'consume', items: [{ key: 'x', tpl: 'magazine' }] });
+  await main(notify(second.orderId, 29900));
+  const st = (await main({ action: 'getEntitlement' })).state;
+  assert.strictEqual(st.lifetime.used, 1, 'a duplicate payment does not reset the monthly usage');
+  assert.strictEqual((await main({ action: 'syncOrder', orderId: second.orderId })).status, 'paid');
 });
 
 test('api: expired packs are ignored and cleared on the next purchase', async () => {
@@ -173,13 +291,13 @@ test('api: expired packs are ignored and cleared on the next purchase', async ()
   const first = await main({ action: 'createOrder', kind: 'plan', planId: 'month' });
   await main(notify(first.orderId, 1490));
   clock += 31 * serverQuota.DAY;
-  for (const k of ['a', 'b']) assert.ok((await main({ action: 'consume', keys: [k] })).ok);
-  assert.strictEqual((await main({ action: 'consume', keys: ['c'] })).code, 'insufficient', 'expired pack does not count');
+  assert.strictEqual((await main({ action: 'consume', items: [{ key: 'a', tpl: 'magazine' }] })).code, 'insufficient', 'expired pack does not count');
+  assert.ok((await main({ action: 'consume', items: [{ key: 'b', tpl: 'polaroid' }] })).ok, 'the free template still works');
   const second = await main({ action: 'createOrder', kind: 'plan', planId: 'year' });
   await main(notify(second.orderId, 10990));
   const packs = fake.dump().users['openid-a'].packs;
   assert.deepStrictEqual(packs.map((p) => p.planId), ['year']);
-  assert.ok((await main({ action: 'consume', keys: ['c'] })).ok);
+  assert.ok((await main({ action: 'consume', items: [{ key: 'c', tpl: 'magazine' }] })).ok);
 });
 
 test('api: syncOrder and getEntitlement reconcile a lost notification via queryOrder', async () => {
@@ -221,7 +339,7 @@ test('api: invite codes live on the server, unlock without charging, and are rat
   assert.strictEqual((await main({ action: 'redeemInvite', code: '' })).valid, false);
   const ok = await main({ action: 'redeemInvite', code: '  GEO0930 ' });
   assert.deepStrictEqual([ok.valid, ok.state.invite], [true, true]);
-  for (const k of ['a', 'b', 'c', 'd']) assert.ok((await main({ action: 'consume', keys: [k] })).ok);
+  for (const k of ['a', 'b', 'c', 'd']) assert.ok((await main({ action: 'consume', items: [{ key: k, tpl: 'magazine' }] })).ok);
   assert.strictEqual(fake.dump().users['openid-a'].freeUsed, 0, 'invite members are not charged');
 
   const none = setup({ INVITE_CODES: '' });
@@ -240,7 +358,7 @@ test('api: only the most recent charged keys are kept', async () => {
   const { main, fake } = setup();
   await main({ action: 'redeemInvite', code: 'spare-code' });
   fake.patch('users', 'openid-a', { invite: false, freeUsed: 0, charged: Array.from({ length: 400 }, (_, i) => `old${i}`) });
-  await main({ action: 'consume', keys: ['fresh'] });
+  await main({ action: 'consume', items: [{ key: 'fresh', tpl: 'polaroid' }] });
   const charged = fake.dump().users['openid-a'].charged;
   assert.strictEqual(charged.length, 300); assert.strictEqual(charged[charged.length - 1], 'fresh');
 });
@@ -297,13 +415,14 @@ test('client: cancel, server errors, charge and invite go through the cloud func
 
     await assert.rejects(payment.pay({ kind: 'plan', planId: 'bogus', title: 't', priceText: 'p' }), (e) => e.code === 'bad_request');
 
-    const c1 = await payment.charge('s:1'); assert.strictEqual(c1.ok, true); assert.strictEqual(c1.state.freeUsed, 1);
-    await payment.charge('s:2');
-    const c3 = await payment.charge('s:3'); assert.strictEqual(c3.ok, false); assert.strictEqual(c3.state.freeUsed, 2);
+    const c1 = await payment.charge('s:1', 'polaroid'); assert.strictEqual(c1.ok, true); assert.strictEqual(c1.state.freeUsed, 1);
+    const other = await payment.charge('s:2', 'magazine'); assert.strictEqual(other.ok, false, 'free quota is for polaroid only');
+    for (let i = 3; i <= 11; i += 1) await payment.charge(`s:${i}`, 'polaroid');
+    const c12 = await payment.charge('s:12', 'polaroid'); assert.strictEqual(c12.ok, false); assert.strictEqual(c12.state.freeUsed, 10);
 
     assert.deepStrictEqual((await payment.redeemInvite('bad')).valid, false);
     const good = await payment.redeemInvite('geo0930');
     assert.strictEqual(good.valid, true); assert.strictEqual(good.state.invite, true);
-    assert.strictEqual((await payment.charge('s:9')).ok, true, 'invite members can always save');
+    assert.strictEqual((await payment.charge('s:99', 'magazine')).ok, true, 'invite members can always save');
   });
 });

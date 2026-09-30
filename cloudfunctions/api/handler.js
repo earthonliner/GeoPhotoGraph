@@ -3,14 +3,16 @@
  *
  * 调用约定：小程序端 wx.cloud.callFunction({ name: 'api', data: { action, ... } })，返回 { ok, ... }。
  *   getEntitlement        -> { ok, state }
- *   createOrder           { kind: 'plan'|'single', planId? } -> { ok, orderId, payment }
+ *   createOrder           { kind: 'plan'|'lifetime'|'single', planId? } -> { ok, orderId, payment }
+ *                         买断已拥有时返回 code: 'already_owned'
  *   syncOrder             { orderId } -> { ok, status: 'pending'|'paid'|'failed', state }
- *   consume               { keys: [string] } -> { ok, state } | { ok:false, code:'insufficient', state }
+ *   consume               { items: [{ key, tpl }] } -> { ok, state } | { ok:false, code:'insufficient', state }
+ *                         key 相同只计费一次；tpl 是海报所用模板，免费模板先用免费额度
  *   redeemInvite          { code } -> { ok, valid, state }
  * 微信支付结果回调也发给同一个函数（事件里没有 action，带 returnCode / outTradeNo），见 onPayNotify。
  *
  * 数据库集合（权限一律设为“仅云函数可读写”，小程序端不能直接访问）：
- *   users   _id = openid    { invite, bought, freeUsed, singles, packs, charged, inviteFails, ... }
+ *   users   _id = openid    { invite, bought, freeMonth, freeUsed, singles, lifetime, packs, charged, inviteFails, ... }
  *   orders  _id = 商户订单号  { openid, kind, planId, title, totalFee, status, createdAt, paidAt, transactionId }
  *
  * 环境变量：SUB_MCH_ID（云开发微信支付子商户号，必填）、INVITE_CODES（邀请码，逗号分隔）、
@@ -21,6 +23,7 @@ const quota = require('./quota');
 
 const CHARGED_KEEP = 300;
 const MAX_KEYS = 20;
+const MAX_KEY_LEN = 64;
 const PENDING_WINDOW = 2 * 60 * 60 * 1000;
 const INVITE_MAX_FAILS = 10;
 const INVITE_WINDOW = 60 * 60 * 1000;
@@ -75,10 +78,18 @@ function createHandler(deps) {
     return { ok: true, state: stateOf(await ensureUser(openid)) };
   }
 
-  // 保存前扣额度。每个 key 只计费一次（同一张照片重试不重复扣）；邀请码会员不扣。
-  async function consume(openid, rawKeys) {
-    const keys = Array.from(new Set((Array.isArray(rawKeys) ? rawKeys : []).map((k) => String(k || '')).filter((k) => k && k.length <= 64)));
-    if (!keys.length || keys.length > MAX_KEYS) return { ok: false, code: 'bad_request', message: 'invalid keys' };
+  // 保存前扣额度。每个 key 只计费一次（同一张照片同一模板重试不重复扣）；邀请码会员不扣。
+  async function consume(openid, rawItems) {
+    const seen = new Set();
+    const items = [];
+    (Array.isArray(rawItems) ? rawItems : []).forEach((it) => {
+      const key = String((it && it.key) || '');
+      const tpl = String((it && it.tpl) || '');
+      if (!key || key.length > MAX_KEY_LEN || tpl.length > MAX_KEY_LEN || seen.has(key)) return;
+      seen.add(key);
+      items.push({ key, tpl });
+    });
+    if (!items.length || items.length > MAX_KEYS) return { ok: false, code: 'bad_request', message: 'invalid items' };
     await ensureUser(openid);
     const t0 = now();
     const result = await db.runTransaction(async (t) => {
@@ -86,11 +97,12 @@ function createHandler(deps) {
       const user = (await ref.get()).data;
       if (user.invite) return { ok: true, user };
       const charged = Array.isArray(user.charged) ? user.charged : [];
-      const fresh = keys.filter((k) => !charged.includes(k));
+      const fresh = items.filter((it) => !charged.includes(it.key));
       if (!fresh.length) return { ok: true, user };
-      if (quota.available(user, catalog.freeQuota, t0) < fresh.length) return { ok: false, code: 'insufficient', user };
-      const next = quota.consume(user, fresh.length, catalog.freeQuota, t0);
-      next.charged = charged.concat(fresh).slice(-CHARGED_KEEP);
+      const tpls = fresh.map((it) => it.tpl);
+      if (!quota.available(user, tpls, catalog.free, t0)) return { ok: false, code: 'insufficient', user };
+      const next = quota.consume(user, tpls, catalog.free, t0);
+      next.charged = charged.concat(fresh.map((it) => it.key)).slice(-CHARGED_KEEP);
       await ref.update({ data: next });
       return { ok: true, user: Object.assign({}, user, next) };
     });
@@ -122,10 +134,12 @@ function createHandler(deps) {
 
   async function createOrder(openid, event) {
     const kind = event && event.kind;
-    const item = kind === 'plan' ? catalog.plans[event.planId] : kind === 'single' ? catalog.single : null;
+    const item =
+      kind === 'plan' ? catalog.plans[event.planId] : kind === 'lifetime' ? catalog.lifetime : kind === 'single' ? catalog.single : null;
     if (!item) return { ok: false, code: 'bad_request', message: 'unknown product' };
     if (!env.SUB_MCH_ID) return { ok: false, code: 'not_configured', message: 'SUB_MCH_ID is not set' };
-    await ensureUser(openid);
+    const user = await ensureUser(openid);
+    if (kind === 'lifetime' && user.lifetime) return { ok: false, code: 'already_owned', message: 'lifetime already owned' };
 
     const orderId = `GP${now().toString(36).toUpperCase()}${randomText(8, '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ')}`;
     await orders.add({
@@ -170,7 +184,10 @@ function createHandler(deps) {
       if (paid.totalFee !== undefined && Number(paid.totalFee) !== order.totalFee) return { ok: false, code: 'amount_mismatch' };
       const uref = t.collection('users').doc(order.openid);
       const user = (await uref.get()).data;
-      const grant = order.kind === 'plan' ? quota.grantPlan(user, catalog.plans[order.planId], orderId, t0) : quota.grantSingle(user, catalog.single);
+      let grant;
+      if (order.kind === 'plan') grant = quota.grantPlan(user, catalog.plans[order.planId], orderId, t0);
+      else if (order.kind === 'lifetime') grant = quota.grantLifetime(user, catalog.lifetime, orderId, t0);
+      else grant = quota.grantSingle(user, catalog.single);
       await uref.update({ data: grant });
       await oref.update({ data: { status: 'paid', paidAt: t0, transactionId: paid.transactionId || '' } });
       return { ok: true };
@@ -260,7 +277,7 @@ function createHandler(deps) {
         case 'syncOrder':
           return await syncOrder(openid, ev.orderId);
         case 'consume':
-          return await consume(openid, ev.keys);
+          return await consume(openid, ev.items);
         case 'redeemInvite':
           return await redeemInvite(openid, ev.code);
         default:

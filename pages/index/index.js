@@ -30,6 +30,9 @@ const TINT = '#007AFF';
 const MAPBOX_LOGO = '/assets/mapbox-logo.png';
 // 回到页面时向服务端同步权益的最短间隔：选图、定位等系统界面返回也会触发 onShow
 const SYNC_INTERVAL = 30 * 1000;
+// 批量导入与批量下载只对月度、年度、买断会员和邀请码开放（iOS 不提供购买，文案里不带购买引导）
+const BATCH_NOTICE = '批量导入与批量下载只对月度、年度、买断会员和邀请码开放，单张解锁不含批量。';
+const BATCH_NOTICE_IOS = '批量导入与批量下载仅对会员开放，已有会员权益或邀请码的用户可以使用。';
 const SHARE_TITLE = 'GEOPICS · 把照片与它发生的地方，做成一张海报';
 // 转发卡片按 5:4 显示
 const SHARE_W = 750;
@@ -112,18 +115,24 @@ function templateTabs(categoryId) {
   return templatesOf(categoryId).map((t) => ({ id: t.id, name: t.name }));
 }
 
-// 会员档位附上单张均价，并标出均价最低的一档
-function planOffers() {
+// 会员档位：月度 / 年度附上单张均价并标出均价最低的一档；买断只能买一次，已拥有时不再出现
+function planOffers(state) {
   const plans = appConfig.membership.plans;
   const unit = (pl) => pl.price / pl.quota;
   const best = Math.min(...plans.map(unit));
-  return plans.map((pl) =>
+  const rows = plans.map((pl) =>
     Object.assign({}, pl, {
+      kind: 'plan',
       priceText: membership.formatPrice(pl.price),
       unitText: `约 ¥${(unit(pl) / 100).toFixed(2)}/张`,
       best: plans.length > 1 && unit(pl) === best
     })
   );
+  const lifetime = appConfig.membership.lifetime;
+  if (lifetime && !(state && membership.hasLifetime(state))) {
+    rows.push(Object.assign({}, lifetime, { kind: 'lifetime', priceText: membership.formatPrice(lifetime.price), unitText: '永久有效', best: false }));
+  }
+  return rows;
 }
 
 Page({
@@ -131,7 +140,8 @@ Page({
     footerOn: true,
     exportSize: '',
     isMember: false,
-    freeLeft: 0,
+    batchOk: false,
+    stageNote: '',
     previewCovered: false,
     coverImage: '',
     memberLabel: '',
@@ -347,7 +357,8 @@ Page({
       photoPath: filePath,
       templateId: templateId || (this.poster && this.poster.templateId) || this.data.templateId,
       selected: true,
-      unlocked: false,
+      // 已保存过（已计费）的模板：同一张照片同一模板再次保存不重复计费
+      unlocked: {},
       lat: null,
       lon: null,
       place: '',
@@ -383,6 +394,7 @@ Page({
       selectedCount: list.filter((x) => x.selected).length,
       currentId: this.poster.id,
       currentLocked: !this.isEntitled(this.poster),
+      stageNote: this.stageNote(),
       // 全部带水印时角标没有区分意义，只在部分照片已解锁时标出
       lockBadges: list.some((x) => x.locked) && list.some((x) => !x.locked)
     };
@@ -390,61 +402,91 @@ Page({
 
   /* ---------------------------- 会员 / 水印 / 付费 ---------------------------- */
 
-  // 这张照片已解锁（单张付费 / 已消耗过额度），或还有免费 / 会员额度 => 无水印且可下载
+  // 这张照片在当前模板下已保存过（已计费），或还有可用额度 => 无水印且可下载。
+  // 免费额度只适用于免费模板（拍立得），其余模板必须有付费额度
   isEntitled(item) {
-    return !!item.unlocked || membership.availableQuota(this.member) > 0;
+    return !!item.unlocked[item.templateId] || membership.availableQuota(this.member, item.templateId) > 0;
+  },
+
+  // 预览下方的一行提示：带水印的原因，或免费模板的剩余免费张数
+  stageNote() {
+    const p = this.poster;
+    if (!p.photoPath) return '';
+    const now = Date.now();
+    const free = membership.freeRemaining(this.member, now);
+    const isFree = membership.isFreeTemplate(p.templateId);
+    if (this.isEntitled(p)) {
+      const paid = membership.paidRemaining(this.member, now) > 0;
+      return isFree && free > 0 && !paid ? `拍立得本月免费剩余 ${free} 张，每保存一张消耗 1 张` : '';
+    }
+    if (membership.isMember(this.member, now)) return '额度已用完，预览带水印';
+    if (isFree) return '本月拍立得免费额度已用完，预览带水印';
+    const tpl = TEMPLATES.find((t) => t.id === p.templateId);
+    const name = tpl ? `「${tpl.name}」` : '该';
+    return `${name}模板预览带水印、不能下载${free > 0 ? `；拍立得本月还可免费保存 ${free} 张` : ''}`;
   },
 
   memberView() {
     const now = Date.now();
     return {
-      isMember: membership.remainingQuota(this.member, now) > 0,
-      freeLeft:
-        membership.remainingQuota(this.member, now) > 0
-          ? 0
-          : membership.freeRemaining(this.member) + membership.singlesRemaining(this.member),
+      isMember: membership.isMember(this.member, now),
+      batchOk: membership.batchAllowed(this.member, now),
       memberLabel: membership.label(this.member, now, this.canPurchase),
       memberChip: membership.chipLabel(this.member, now, this.canPurchase),
-      packLines: membership.packLines(this.member, appConfig.membership.plans, now)
+      packLines: membership.packLines(this.member, appConfig.membership.plans, now),
+      plans: planOffers(this.member)
     };
   },
 
-  // 一次下载要处理的照片中，哪些可以下载、哪些被额度 / 水印拦下
+  // 一次下载要处理的照片中，哪些可以下载、哪些被额度 / 水印拦下。
+  // 免费模板的照片先用免费额度，其余照片（及免费额度不够的部分）共用付费额度
   splitByEntitlement(items) {
-    let remaining = membership.availableQuota(this.member);
-    const allowed = [];
-    const blocked = [];
-    items.forEach((it) => {
-      if (it.unlocked) {
-        allowed.push(it);
-      } else if (remaining > 0) {
-        allowed.push(it);
-        remaining -= 1;
-      } else {
-        blocked.push(it);
+    const now = Date.now();
+    let free = membership.freeRemaining(this.member, now);
+    let paid = membership.paidRemaining(this.member, now);
+    const ok = new Set(items.filter((it) => it.unlocked[it.templateId]));
+    const need = items.filter((it) => !ok.has(it));
+    need.forEach((it) => {
+      if (membership.isFreeTemplate(it.templateId) && free > 0) {
+        free -= 1;
+        ok.add(it);
       }
     });
-    return { allowed, blocked };
+    need.forEach((it) => {
+      if (!ok.has(it) && paid > 0) {
+        paid -= 1;
+        ok.add(it);
+      }
+    });
+    return { allowed: items.filter((it) => ok.has(it)), blocked: items.filter((it) => !ok.has(it)) };
   },
 
-  // 扣减额度；该照片本次会话内再次保存不重复计费。
+  // 批量导入与批量下载只对会员开放：未开通时弹出付费面板说明，返回 false
+  requireBatch(resume) {
+    if (membership.batchAllowed(this.member)) return true;
+    this.openPaywall(resume, this.canPurchase ? BATCH_NOTICE : BATCH_NOTICE_IOS);
+    return false;
+  },
+
+  // 扣减额度；同一张照片同一模板本次会话内再次保存不重复计费。
   // cloud 模式在导出前向服务端扣（额度不足会抛出 code 为 insufficient 的错误），本地模式在保存成功后扣
   async chargeItem(item) {
-    if (item.unlocked) return;
+    const tpl = item.templateId;
+    if (item.unlocked[tpl]) return;
     if (!payment.isMock()) {
-      const r = await payment.charge(`${this._sessionId}:${item.id}`);
+      const r = await payment.charge(`${this._sessionId}:${item.id}:${tpl}`, tpl);
       this.adoptMember(r.state, true);
       if (!r.ok) {
         const err = new Error('insufficient quota');
         err.code = 'insufficient';
         throw err;
       }
-      item.unlocked = true;
+      item.unlocked[tpl] = true;
       return;
     }
-    item.unlocked = true;
+    item.unlocked[tpl] = true;
     if (this.member.invite) return;
-    this.member = membership.consume(this.member, 1);
+    this.member = membership.consume(this.member, [tpl]);
     membership.save(this.member);
   },
 
@@ -566,17 +608,25 @@ Page({
       plan = appConfig.membership.plans.find((pl) => pl.id === id);
       if (!plan) return;
       order = { kind, planId: plan.id, title: plan.name, priceText: membership.formatPrice(plan.price) };
+    } else if (kind === 'lifetime') {
+      plan = appConfig.membership.lifetime;
+      if (!plan || membership.hasLifetime(this.member)) return;
+      order = { kind, title: plan.name, priceText: membership.formatPrice(plan.price) };
     } else {
       if (!this.data.hasPhoto) return;
       const single = appConfig.membership.single;
       order = { kind: 'single', title: single.name, priceText: membership.formatPrice(single.price) };
     }
-    const target = this.poster;
     let result;
     try {
       result = await payment.pay(order);
     } catch (err) {
       console.error('pay failed', err);
+      if (err && err.code === 'already_owned') {
+        wx.showToast({ title: '已拥有买断会员', icon: 'none' });
+        this.syncMember(true);
+        return;
+      }
       wx.showToast({ title: '支付失败，请重试', icon: 'none' });
       return;
     }
@@ -591,11 +641,11 @@ Page({
     }
     if (result.state) {
       this.adoptMember(result.state, true);
-    } else if (plan) {
-      this.member = membership.addPack(this.member, plan);
-      membership.save(this.member);
     } else {
-      target.unlocked = true;
+      if (kind === 'plan') this.member = membership.addPack(this.member, plan);
+      else if (kind === 'lifetime') this.member = membership.addLifetime(this.member, plan);
+      else this.member = membership.addSingle(this.member);
+      membership.save(this.member);
     }
     this.finishUnlock('已解锁');
   },
@@ -657,16 +707,30 @@ Page({
   // 缩略图条末尾的 “+”：继续添加，或重新选择替换全部
   async onTapAddTile() {
     if (this.data.busy) return;
+    const batch = membership.batchAllowed(this.member);
     const canAdd = this.items.length < MAX_BATCH;
     const replace = this.items.length > 1 ? '重新选择（替换全部）' : '重新选择照片';
+    // 非会员只能一张一张做：第二项说明批量是会员功能
+    const itemList = !batch ? [replace, '批量导入（会员功能）'] : canAdd ? ['继续添加照片', replace] : [replace];
     let tapIndex;
     try {
-      ({ tapIndex } = await wxp('showActionSheet', { itemList: canAdd ? ['继续添加照片', replace] : [replace] }));
+      ({ tapIndex } = await wxp('showActionSheet', { itemList }));
     } catch (e) {
+      return;
+    }
+    if (!batch) {
+      if (tapIndex === 0) await this.onChoosePhoto();
+      else this.requireBatch(() => this.resumeAddPhotos());
       return;
     }
     if (canAdd && tapIndex === 0) await this.onAddPhotos();
     else await this.onChoosePhoto();
+  },
+
+  // 购买会员后继续刚才想做的批量导入；买的若是单张（不含批量）则不再打扰
+  resumeAddPhotos() {
+    if (membership.batchAllowed(this.member)) return this.onAddPhotos();
+    return null;
   },
 
   async chooseAndImport(append) {
@@ -674,7 +738,12 @@ Page({
       wx.showToast({ title: '请点击下方「前往小程序」后使用', icon: 'none' });
       return;
     }
-    const remain = MAX_BATCH - (append ? this.items.length : 0);
+    const batch = membership.batchAllowed(this.member);
+    if (append && !batch) {
+      this.requireBatch(() => this.resumeAddPhotos());
+      return;
+    }
+    const remain = batch ? MAX_BATCH - (append ? this.items.length : 0) : 1;
     if (remain <= 0) {
       wx.showToast({ title: `最多 ${MAX_BATCH} 张`, icon: 'none' });
       return;
@@ -1511,9 +1580,9 @@ Page({
 
   /* ---------------------------- 转发 ---------------------------- */
 
-  // 标题只使用自动识别的地名：手动输入的文字不经审核，不放进转发给他人的标题
+  // 标题带上当前地名（包括用户手动输入的）
   shareTitle() {
-    const place = this.data.hasPhoto && !this.poster.placeManual ? (this.poster.place || '').trim() : '';
+    const place = this.data.hasPhoto ? (this.poster.place || '').trim() : '';
     if (!place || place === 'UNKNOWN' || place === 'LOCATING…') return SHARE_TITLE;
     return `「${place}」· 用 GEOPICS 做的地图海报`;
   },
@@ -1615,31 +1684,51 @@ Page({
     return tempFilePath;
   },
 
-  // 无剩余额度且未解锁的照片不能下载：全部被拦下就弹出付费面板，部分被拦下则询问；
+  // 被拦下的原因与购买引导。allowedCount 为这次仍可下载的张数
+  blockedNotice(blocked, total, allowedCount) {
+    const now = Date.now();
+    const buy = this.canPurchase;
+    const member = membership.isMember(this.member, now) || this.member.bought;
+    const onlyFree = blocked.every((it) => membership.isFreeTemplate(it.templateId));
+    const free = membership.freeRemaining(this.member, now);
+    let text;
+    if (allowedCount > 0) {
+      text = member
+        ? `本次需下载 ${total} 张，剩余额度只够 ${allowedCount} 张。`
+        : `额度只够 ${allowedCount} 张，其余 ${blocked.length} 张带水印，无法下载。`;
+      if (buy) text += member ? `购买额外的月度或年度会员可继续下载其余 ${blocked.length} 张。` : '开通会员可继续下载。';
+      return text;
+    }
+    if (member) {
+      text = membership.hasLifetime(this.member) ? '本月额度已用完，下月 1 日重置。' : '额度已用完或已到期。';
+    } else if (onlyFree) {
+      text = `本月 ${appConfig.membership.free.monthly} 张拍立得免费额度已用完，下月 1 日重置。`;
+    } else {
+      text = `该模板预览带水印、不能下载，付费后才可保存。${free > 0 ? `拍立得模板本月还可免费保存 ${free} 张。` : ''}`;
+    }
+    if (buy) text += member ? '购买额外的月度或年度会员即可继续下载。' : '开通会员即可继续下载。';
+    return text;
+  },
+
+  // 没有可用额度且未保存过的照片不能下载：全部被拦下就弹出付费面板，部分被拦下则询问；
   // 购买 / 兑换成功后自动继续刚才的操作
   async requestSave(items, resume) {
     if (this.data.busy || !items.length) return;
     const { allowed, blocked } = this.splitByEntitlement(items);
-    const bought = this.member.bought;
+    const member = membership.isMember(this.member) || this.member.bought;
     const buy = this.canPurchase;
-    const freeTotal = appConfig.membership.freeQuota;
-    const upsell = !buy ? '' : bought ? '购买额外的月度或年度会员即可继续下载。' : '开通会员即可继续下载。';
-    const exhausted = (bought ? '额度已用完或已到期。' : `${freeTotal} 张免费额度已用完。`) + upsell;
+    const notice = blocked.length ? this.blockedNotice(blocked, items.length, allowed.length) : '';
     if (!allowed.length) {
-      await this.openPaywall(resume, exhausted);
+      await this.openPaywall(resume, notice);
       return;
     }
     if (blocked.length) {
-      let notice = bought
-        ? `本次需下载 ${items.length} 张，剩余额度只够 ${allowed.length} 张。`
-        : `免费额度只够 ${allowed.length} 张，其余 ${blocked.length} 张带水印，无法下载。`;
-      if (buy) notice += bought ? `购买额外的月度或年度会员可继续下载其余 ${blocked.length} 张。` : '开通会员可继续下载。';
       // 按钮文字最多 4 个字符，超出时 showModal 直接失败，张数只能放在正文里
       const res = await wxp('showModal', {
-        title: bought ? '会员额度不足' : '部分照片未解锁',
+        title: member ? '会员额度不足' : '部分照片未解锁',
         content: `${notice}\n是否仅下载可下载的 ${allowed.length} 张？`,
         confirmText: '仅下载',
-        cancelText: buy ? (bought ? '购买会员' : '去解锁') : '取消',
+        cancelText: buy ? (member ? '购买会员' : '去解锁') : '取消',
         confirmColor: TINT
       }).catch(() => ({ confirm: false }));
       if (!res.confirm) {
@@ -1677,6 +1766,7 @@ Page({
 
   // 工具栏的批量按钮：全部勾选时即“下载全部”，否则只下载勾选的照片
   onSaveBatch() {
+    if (!this.requireBatch(() => this.onSaveBatch())) return;
     return this.data.selectedCount === this.items.length ? this.onSaveAll() : this.onSaveSelected();
   },
 
@@ -1725,7 +1815,7 @@ Page({
     if (ok || short) this.refreshEntitlement();
     if (short) {
       // 服务端认定额度不足（本地快照过期或被篡改）：购买 / 兑换成功后继续下载没保存的照片
-      const rest = items.filter((it) => !it.unlocked);
+      const rest = items.filter((it) => !it.unlocked[it.templateId]);
       const resume = () => this.requestSave(rest, resume);
       const saved = ok ? `已保存 ${ok} 张，剩余额度不足` : '额度不足';
       const upsell = !this.canPurchase ? '。' : ok ? '，购买会员后可继续下载其余照片。' : '，购买会员后即可继续下载。';

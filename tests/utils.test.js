@@ -242,6 +242,9 @@ test('batch: deterministic with a seeded random function and handles edge cases'
   assert.deepStrictEqual(pickRandomTemplates(['a', 'b'], 0), []);
 });
 
+const POLAROID = 'polaroid';
+const OTHER = 'magazine';
+
 test('membership: invite code is case-insensitive and unlimited', () => {
   const m = require('../utils/membership');
   config.membership.inviteCodes = ['geo0930'];
@@ -249,125 +252,192 @@ test('membership: invite code is case-insensitive and unlimited', () => {
   assert.ok(m.isValidInvite('  GEO0930 '));
   assert.ok(!m.isValidInvite('geo0931'));
   assert.ok(!m.isValidInvite(''));
-  const invited = { invite: true, bought: false, packs: [] };
-  assert.strictEqual(m.remainingQuota(invited), Infinity);
-  assert.strictEqual(m.consume(invited, 5), invited);
+  const invited = m.normalize({ invite: true });
+  assert.strictEqual(m.paidRemaining(invited), Infinity);
+  assert.strictEqual(m.availableQuota(invited, OTHER), Infinity);
+  assert.strictEqual(m.consume(invited, [OTHER, POLAROID]), invited);
   assert.strictEqual(m.label(invited), '会员 · 邀请码');
+  assert.ok(m.isMember(invited) && m.batchAllowed(invited));
 });
 
-test('membership: plans, prices and quota packs', () => {
+test('membership: catalogue, prices and formatting', () => {
   const m = require('../utils/membership');
-  const { plans, single } = config.membership;
+  const { plans, single, lifetime, free } = config.membership;
   const month = plans.find((p) => p.id === 'month');
   const year = plans.find((p) => p.id === 'year');
-  assert.deepStrictEqual([single.price, month.price, year.price], [129, 1490, 10990]);
-  assert.deepStrictEqual([month.quota, year.quota], [120, 2000]);
+  assert.deepStrictEqual([single.price, month.price, year.price, lifetime.price], [129, 1490, 10990, 29900]);
+  assert.deepStrictEqual([month.quota, year.quota, lifetime.monthly], [120, 2000, 120]);
+  assert.deepStrictEqual(free, { templates: ['polaroid'], monthly: 10 });
   assert.deepStrictEqual([m.formatPrice(129), m.formatPrice(1490), m.formatPrice(10990), m.formatPrice(1900)], ['¥1.29', '¥14.9', '¥109.9', '¥19']);
+  const { TEMPLATES } = require('../utils/poster/registry');
+  free.templates.forEach((id) => assert.ok(TEMPLATES.some((t) => t.id === id), `free template ${id} exists`));
+});
 
-  const now = Date.UTC(2026, 8, 30);
-  const free = { invite: false, bought: false, freeUsed: config.membership.freeQuota, packs: [] };
-  assert.strictEqual(m.remainingQuota(free, now), 0);
-  assert.strictEqual(m.label(free, now), '免费额度已用完 · 开通会员');
+test('membership: free tier covers polaroid only, 10 a month in Beijing time', () => {
+  const m = require('../utils/membership');
+  const now = Date.UTC(2026, 8, 30, 10);
+  const fresh = m.load({ get: () => null, set() {} });
+  assert.strictEqual(m.monthKey(now), '2026-09');
+  assert.strictEqual(m.freeRemaining(fresh, now), 10);
+  assert.strictEqual(m.availableQuota(fresh, POLAROID, now), 10);
+  assert.strictEqual(m.availableQuota(fresh, OTHER, now), 0, 'other templates stay watermarked without payment');
+  assert.ok(!m.isMember(fresh, now) && !m.batchAllowed(fresh, now));
+  assert.strictEqual(m.label(fresh, now), '拍立得本月免费剩余 10 张 · 开通会员');
+  assert.strictEqual(m.chipLabel(fresh, now), '免费 · 10 张');
 
-  const s1 = m.addPack(free, month, now);
-  assert.strictEqual(m.remainingQuota(s1, now), 120);
+  let st = m.consume(fresh, Array(4).fill(POLAROID), now);
+  assert.strictEqual(m.freeRemaining(st, now), 6);
+  assert.strictEqual(fresh.freeUsed, 0, 'consume does not mutate');
+  st = m.consume(st, Array(9).fill(POLAROID), now);
+  assert.strictEqual(m.freeRemaining(st, now), 0);
+  assert.strictEqual(m.availableQuota(st, POLAROID, now), 0);
+  assert.strictEqual(m.label(st, now), '本月免费额度已用完 · 开通会员');
+  assert.strictEqual(m.label(st, now, false), '本月免费额度已用完', 'no purchase prompt where purchases are unavailable');
+  assert.strictEqual(m.chipLabel(st, now), '开通会员');
+  assert.strictEqual(m.chipLabel(st, now, false), '额度已用完');
+
+  // 北京时间次月 1 日 00:00 重置，与手机时区无关
+  assert.strictEqual(m.freeRemaining(st, Date.UTC(2026, 8, 30, 15, 59, 59)), 0);
+  assert.strictEqual(m.monthKey(Date.UTC(2026, 8, 30, 16, 0, 0)), '2026-10');
+  assert.strictEqual(m.freeRemaining(st, Date.UTC(2026, 8, 30, 16, 0, 0)), 10);
+  assert.strictEqual(m.monthKey(Date.UTC(2026, 11, 31, 16)), '2027-01');
+
+  // 换月后再消耗，计数从 0 开始
+  const next = Date.UTC(2026, 9, 2);
+  const after = m.consume(st, [POLAROID], next);
+  assert.strictEqual(after.freeMonth, '2026-10');
+  assert.strictEqual(m.freeRemaining(after, next), 9);
+
+  // 非免费模板不消耗免费额度
+  const other = m.consume(fresh, [OTHER], now);
+  assert.strictEqual(m.freeRemaining(other, now), 10);
+});
+
+test('membership: quota packs stack, expire and are spent earliest-first', () => {
+  const m = require('../utils/membership');
+  const { plans } = config.membership;
+  const month = plans.find((p) => p.id === 'month');
+  const year = plans.find((p) => p.id === 'year');
+  const now = Date.UTC(2026, 8, 30, 10);
+  const none = m.normalize({});
+
+  const s1 = m.addPack(none, month, now);
+  assert.strictEqual(m.packsRemaining(s1, now), 120);
+  assert.ok(m.isMember(s1, now) && m.batchAllowed(s1, now));
   assert.strictEqual(m.label(s1, now), '会员 · 剩余 120 张');
-  // 有效期
-  assert.strictEqual(m.remainingQuota(s1, now + 29 * m.DAY), 120);
-  assert.strictEqual(m.remainingQuota(s1, now + 31 * m.DAY), 0);
-  assert.strictEqual(m.label(s1, now + 31 * m.DAY), '额度已用完 · 续购');
+  assert.strictEqual(m.availableQuota(s1, OTHER, now), 120, 'paid quota works for every template');
+  assert.strictEqual(m.availableQuota(s1, POLAROID, now), 130, 'polaroid also has the monthly free quota');
+  assert.strictEqual(m.packsRemaining(s1, now + 29 * m.DAY), 120);
+  assert.strictEqual(m.packsRemaining(s1, now + 31 * m.DAY), 0);
+  assert.ok(!m.isMember(s1, now + 31 * m.DAY), 'expired pack is no longer a membership');
+  assert.strictEqual(m.label(s1, now + 31 * m.DAY), '会员已到期 · 续购');
 
-  // 消耗额度
-  const s2 = m.consume(s1, 20, now);
-  assert.strictEqual(m.remainingQuota(s2, now), 100);
+  const s2 = m.consume(s1, Array(20).fill(OTHER), now);
+  assert.strictEqual(m.packsRemaining(s2, now), 100);
   assert.strictEqual(s1.packs[0].used, 0, 'consume does not mutate');
-  const s3 = m.consume(s2, 100, now);
-  assert.strictEqual(m.remainingQuota(s3, now), 0);
+  const s3 = m.consume(s2, Array(100).fill(OTHER), now);
+  assert.strictEqual(m.packsRemaining(s3, now), 0);
+  assert.ok(m.isMember(s3, now), 'a used-up pack is still a membership until it expires');
   assert.strictEqual(m.label(s3, now), '额度已用完 · 续购');
-  assert.strictEqual(m.remainingQuota(m.consume(s3, 5, now), now), 0);
+  assert.strictEqual(m.chipLabel(s3, now), '续购会员');
 
-  // 额外购买：叠加，优先扣最早到期的包
   const s4 = m.addPack(m.addPack(s2, year, now + 5 * m.DAY), month, now + 10 * m.DAY);
-  assert.strictEqual(m.remainingQuota(s4, now + 10 * m.DAY), 100 + 2000 + 120);
-  const s5 = m.consume(s4, 110, now + 10 * m.DAY);
+  const t10 = now + 10 * m.DAY;
+  assert.strictEqual(m.packsRemaining(s4, t10), 100 + 2000 + 120);
+  const s5 = m.consume(s4, Array(110).fill(OTHER), t10);
   const byPlan = (st, id, i) => st.packs.filter((p) => p.planId === id)[i || 0];
   assert.strictEqual(byPlan(s5, 'month', 0).used, 120, 'earliest expiring pack is used first');
   assert.strictEqual(byPlan(s5, 'year').used, 0);
-  assert.strictEqual(byPlan(s5, 'month', 1).used, 10, 'then the next earliest');
-  assert.strictEqual(m.remainingQuota(s5, now + 10 * m.DAY), 2000 + 110);
-  // 过期的包在下次购买时被清理
-  assert.strictEqual(m.addPack(s1, year, now + 40 * m.DAY).packs.length, 1);
+  assert.strictEqual(byPlan(s5, 'month', 1).used, 10);
+  assert.strictEqual(m.addPack(s1, year, now + 40 * m.DAY).packs.length, 1, 'expired packs are dropped on the next purchase');
   assert.ok(m.packLines(s2, plans, now)[0].startsWith('月度会员 剩余 100/120 张'));
 });
 
-test('membership: short capsule label for the header', () => {
+test('membership: lifetime plan has a monthly limit that resets each month', () => {
   const m = require('../utils/membership');
-  const month = config.membership.plans.find((p) => p.id === 'month');
-  const now = Date.UTC(2026, 8, 30);
-  const fresh = { invite: false, bought: false, packs: [] };
-  assert.strictEqual(m.chipLabel(fresh, now), '免费 · 2 张');
-  const free = m.consume(m.consume(fresh, 1, now), 1, now);
-  assert.strictEqual(m.chipLabel(free, now), '开通会员');
-  assert.strictEqual(m.chipLabel({ invite: true, bought: false, packs: [] }, now), '会员');
-  const paid = m.consume(m.addPack(free, month, now), 3, now);
-  assert.strictEqual(m.chipLabel(paid, now), '会员 · 117 张');
-  assert.strictEqual(m.chipLabel(paid, now + 31 * m.DAY), '续购会员');
+  const { lifetime } = config.membership;
+  const now = Date.UTC(2026, 8, 30, 10);
+  const none = m.normalize({});
+
+  const s1 = m.addLifetime(none, lifetime, now);
+  assert.ok(m.hasLifetime(s1) && s1.bought);
+  assert.ok(m.isMember(s1, now + 3650 * m.DAY), 'never expires');
+  assert.ok(m.batchAllowed(s1, now + 3650 * m.DAY));
+  assert.strictEqual(m.lifetimeRemaining(s1, now), 120);
+  assert.strictEqual(m.label(s1, now), '会员 · 剩余 120 张');
+  assert.strictEqual(m.chipLabel(s1, now), '会员 · 120 张');
+  assert.deepStrictEqual(m.addLifetime(s1, lifetime, now + 40 * m.DAY).lifetime, s1.lifetime, 'buying twice keeps the original record');
+
+  const used = m.consume(s1, Array(118).fill(OTHER), now);
+  assert.strictEqual(m.lifetimeRemaining(used, now), 2);
+  assert.ok(m.packLines(used, [], now)[0].startsWith('买断会员 本月剩余 2/120 张'));
+  const out = m.consume(used, Array(2).fill(OTHER), now);
+  assert.strictEqual(m.lifetimeRemaining(out, now), 0);
+  assert.strictEqual(m.paidRemaining(out, now), 0);
+  assert.strictEqual(m.label(out, now), '会员 · 本月额度已用完');
+  assert.strictEqual(m.chipLabel(out, now), '会员 · 已用完');
+  assert.strictEqual(m.availableQuota(out, OTHER, now), 0);
+  assert.strictEqual(m.availableQuota(out, POLAROID, now), 10, 'free polaroid quota still applies');
+
+  const nextMonth = Date.UTC(2026, 9, 1, 1);
+  assert.strictEqual(m.lifetimeRemaining(out, nextMonth), 120, 'resets on the 1st, not carried over');
+  const again = m.consume(out, [OTHER], nextMonth);
+  assert.strictEqual(m.lifetimeRemaining(again, nextMonth), 119);
+  assert.strictEqual(again.lifetime.month, '2026-10');
 });
 
-test('membership: two free saves per user before the watermark returns', () => {
+test('membership: spending order is free, lifetime month, earliest pack, then singles', () => {
   const m = require('../utils/membership');
-  const month = config.membership.plans.find((p) => p.id === 'month');
-  const now = Date.UTC(2026, 8, 30);
-  assert.strictEqual(config.membership.freeQuota, 2);
-  const fresh = m.load({ get: () => null, set() {} });
-  assert.strictEqual(m.freeRemaining(fresh), 2);
-  assert.strictEqual(m.availableQuota(fresh, now), 2, 'watermark-free while free quota remains');
-  assert.strictEqual(m.remainingQuota(fresh, now), 0, 'free quota is not paid membership');
-  assert.strictEqual(m.label(fresh, now), '免费额度剩余 2 张 · 开通会员');
+  const { plans, lifetime } = config.membership;
+  const month = plans.find((p) => p.id === 'month');
+  const now = Date.UTC(2026, 8, 30, 10);
+  let st = m.addSingle(m.addPack(m.addLifetime(m.normalize({}), lifetime, now), month, now));
+  assert.strictEqual(m.singlesRemaining(st), 1);
+  assert.strictEqual(m.paidRemaining(st, now), 120 + 120 + 1);
 
-  const one = m.consume(fresh, 1, now);
-  assert.strictEqual(m.freeRemaining(one), 1);
-  assert.strictEqual(fresh.freeUsed, 0, 'consume does not mutate');
-  const none = m.consume(one, 5, now);
-  assert.strictEqual(m.freeRemaining(none), 0);
-  assert.strictEqual(m.availableQuota(none, now), 0, 'watermark back once free quota is used up');
-  assert.strictEqual(m.label(none, now), '免费额度已用完 · 开通会员');
+  const tpls = [POLAROID, POLAROID, OTHER].concat(Array(120).fill(OTHER));
+  st = m.consume(st, tpls, now);
+  assert.strictEqual(st.freeUsed, 2);
+  assert.strictEqual(m.lifetimeRemaining(st, now), 0, 'the monthly lifetime quota is spent before packs');
+  assert.strictEqual(st.packs[0].used, 121 - 120, 'overflow goes to the pack');
+  assert.strictEqual(m.singlesRemaining(st), 1, 'single quota is kept for last');
 
-  // 免费额度先用，再扣额度包；购买不会重置已用的免费额度
-  const paid = m.addPack(one, month, now);
-  assert.strictEqual(m.availableQuota(paid, now), 121);
-  assert.strictEqual(m.label(paid, now), '会员 · 剩余 121 张');
-  const after = m.consume(paid, 3, now);
-  assert.strictEqual(after.freeUsed, 2);
-  assert.strictEqual(after.packs[0].used, 2);
-  assert.strictEqual(m.availableQuota(m.addPack(none, month, now), now), 120);
-
-  // 邀请码不限量，也不消耗免费额度
-  const invited = Object.assign({}, none, { invite: true });
-  assert.strictEqual(m.availableQuota(invited, now), Infinity);
-  assert.strictEqual(m.consume(invited, 1, now).freeUsed, 2);
-
-  // 持久化 freeUsed；缺失或异常值按 0 处理
-  const data = {};
-  const st = { get: (k) => data[k], set: (k, v) => { data[k] = v; } };
-  m.save(one, st);
-  assert.strictEqual(m.load(st).freeUsed, 1);
-  assert.strictEqual(m.load({ get: () => ({ freeUsed: 'x' }) }).freeUsed, 0);
-  assert.strictEqual(m.load({ get: () => ({ freeUsed: -3 }) }).freeUsed, 0);
+  // 单张额度可用于任何模板，用后清零
+  const single = m.consume(m.addSingle(m.normalize({})), [OTHER], now);
+  assert.strictEqual(m.singlesRemaining(single), 0);
+  // 只买单张不含批量
+  const onlySingle = m.addSingle(m.normalize({}));
+  assert.ok(!m.isMember(onlySingle, now) && !m.batchAllowed(onlySingle, now));
+  assert.strictEqual(m.availableQuota(onlySingle, OTHER, now), 1);
+  assert.strictEqual(m.chipLabel(onlySingle, now), '剩余 1 张');
+  assert.strictEqual(m.label(onlySingle, now, false), '剩余 1 张');
 });
 
 test('membership: state persists through storage and ignores garbage', () => {
   const m = require('../utils/membership');
   const data = {};
   const storage = { get: (k) => data[k], set: (k, v) => { data[k] = v; } };
-  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, freeUsed: 0, singles: 0, packs: [] });
-  const state = { invite: true, bought: true, freeUsed: 1, singles: 2, packs: [{ planId: 'month', quota: 120, used: 3, until: 999 }] };
+  const blank = { invite: false, bought: false, freeMonth: '', freeUsed: 0, singles: 0, lifetime: null, packs: [] };
+  assert.deepStrictEqual(m.load(storage), blank);
+  const state = {
+    invite: true,
+    bought: true,
+    freeMonth: '2026-09',
+    freeUsed: 1,
+    singles: 2,
+    lifetime: { planId: 'lifetime', quota: 120, month: '2026-09', used: 4 },
+    packs: [{ planId: 'month', quota: 120, used: 3, until: 999 }]
+  };
   m.save(state, storage);
   assert.deepStrictEqual(m.load(storage), state);
   data['geopics.membership'] = 'oops';
-  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, freeUsed: 0, singles: 0, packs: [] });
-  data['geopics.membership'] = { invite: false, until: 123 };
-  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, freeUsed: 0, singles: 0, packs: [] });
+  assert.deepStrictEqual(m.load(storage), blank);
+  data['geopics.membership'] = { invite: false, until: 123, lifetime: 'yes', freeUsed: 'x' };
+  assert.deepStrictEqual(m.load(storage), blank);
+  // 旧版本缓存里的 freeUsed 没有月份，按新的一月处理
+  data['geopics.membership'] = { freeUsed: 2 };
+  assert.strictEqual(m.freeRemaining(m.load(storage), Date.UTC(2026, 8, 30)), 10);
+  assert.strictEqual(m.load({ get: () => ({ freeUsed: -3 }) }).freeUsed, 0);
 });
 
 test('place-name: long city names drop German/English qualifiers', () => {

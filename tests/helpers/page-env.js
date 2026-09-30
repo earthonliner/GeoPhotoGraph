@@ -69,6 +69,7 @@ function createWx(overrides) {
     sheet: [],
     save: [],
     chooseMedia: 0,
+    chooseCounts: [],
     snapshot: [],
     vibrate: [],
     keepScreenOn: [],
@@ -112,6 +113,7 @@ function createWx(overrides) {
     },
     chooseMedia(o) {
       calls.chooseMedia += 1;
+      calls.chooseCounts.push(o.count);
       o.success({ tempFiles: wx.files.slice(0, o.count).map((f) => ({ tempFilePath: f })) });
     },
     getImageInfo(o) {
