@@ -475,6 +475,9 @@ Page({
     photoPath: '',
     coordText: '',
     dateText: '',
+    dateValue: '',
+    dateManual: false,
+    dateToday: exifParser.toDateValue(new Date()),
     place: '',
     placeLang: 'en',
     placeManual: false,
@@ -489,6 +492,9 @@ Page({
     mapColorId: themes.DEFAULT_THEME_ID,
     customHex: themes.DEFAULT_CUSTOM_HEX,
     customHexText: themes.DEFAULT_CUSTOM_HEX,
+    hueColor: '#FF0000',
+    padCursor: '',
+    hueCursor: '',
     cropEnabled: false,
     cropZoom: 100,
     cropX: 0,
@@ -513,6 +519,7 @@ Page({
       coordText: '',
       dateText: ''
     };
+    this._hsv = themes.hexToHsv(themes.DEFAULT_CUSTOM_HEX);
     this._renderId = 0;
     this.crops = {};
     this._photoSize = null;
@@ -530,7 +537,7 @@ Page({
     const cssH = Math.round((cssW * 4) / 3);
     this.cssSize = { w: cssW, h: cssH };
     this.dpr = Math.min(win.pixelRatio || 2, 3);
-    this.setData({ canvasStyle: `width:${cssW}px;height:${cssH}px;` });
+    this.setData(Object.assign({ canvasStyle: `width:${cssW}px;height:${cssH}px;` }, this.pickerView()));
   },
 
   onReady() {
@@ -605,14 +612,21 @@ Page({
     };
 
     const exif = await exifParser.extractFromFile(filePath);
-    this.poster.dateText = exif.dateText || exifParser.formatDate(new Date());
+    const autoDate = {
+      text: exif.dateText || exifParser.formatDate(new Date()),
+      value: exif.dateValue || exifParser.toDateValue(new Date())
+    };
+    this.poster.autoDate = autoDate;
+    this.poster.dateText = autoDate.text;
 
     this.setData({
       hasPhoto: true,
       photoPath: filePath,
       hasLocation: false,
       coordText: '',
-      dateText: this.poster.dateText,
+      dateText: autoDate.text,
+      dateValue: autoDate.value,
+      dateManual: false,
       place: '',
       placeManual: false,
       cropZoom: 100,
@@ -893,14 +907,107 @@ Page({
   onCustomHexInput(e) {
     const text = e.detail.value;
     const hex = themes.parseHex(text);
-    const patch = { customHexText: text };
-    if (hex) {
-      patch.customHex = hex;
-      patch.themes = this.data.themes.map((t) => (t.id === themes.CUSTOM_ID ? Object.assign({}, t, { tint: hex }) : t));
+    if (!hex) {
+      this.setData({ customHexText: text });
+      return;
     }
-    this.setData(patch, () => {
-      if (hex) this.scheduleRender();
+    const hsv = themes.hexToHsv(hex);
+    // 灰色没有色相信息，保留当前色相，避免色相条跳回 0
+    this._hsv = { h: hsv.s === 0 ? this._hsv.h : hsv.h, s: hsv.s, v: hsv.v };
+    this.setData(this.customColorPatch(hex, text));
+    this.scheduleRender();
+  },
+
+  /* ---------------------------- 调色盘（饱和度/明度 + 色相） ---------------------------- */
+
+  pickerView() {
+    const { h, s, v } = this._hsv;
+    return {
+      hueColor: themes.hsvToHex(h, 1, 1),
+      padCursor: `left:${(s * 100).toFixed(2)}%;top:${((1 - v) * 100).toFixed(2)}%;`,
+      hueCursor: `left:${((h / 360) * 100).toFixed(2)}%;`
+    };
+  },
+
+  customColorPatch(hex, text) {
+    return Object.assign(
+      {
+        customHex: hex,
+        customHexText: text || hex,
+        themes: this.data.themes.map((t) => (t.id === themes.CUSTOM_ID ? Object.assign({}, t, { tint: hex }) : t))
+      },
+      this.pickerView()
+    );
+  },
+
+  measure(selector) {
+    return new Promise((resolve) => {
+      wx.createSelectorQuery()
+        .select(selector)
+        .boundingClientRect((rect) => resolve(rect))
+        .exec();
     });
+  },
+
+  applyHsv(patch) {
+    this._hsv = Object.assign({}, this._hsv, patch);
+    const { h, s, v } = this._hsv;
+    this.setData(this.customColorPatch(themes.hsvToHex(h, s, v)));
+    this.scheduleRender();
+  },
+
+  applyPadTouch(touch) {
+    const rect = this._padRect;
+    if (!rect || !rect.width || !rect.height) return;
+    this.applyHsv({
+      s: clamp((touch.clientX - rect.left) / rect.width, 0, 1),
+      v: 1 - clamp((touch.clientY - rect.top) / rect.height, 0, 1)
+    });
+  },
+
+  applyHueTouch(touch) {
+    const rect = this._hueRect;
+    if (!rect || !rect.width) return;
+    this.applyHsv({ h: clamp((touch.clientX - rect.left) / rect.width, 0, 1) * 360 });
+  },
+
+  async onPadStart(e) {
+    const touch = e.touches[0];
+    this._padRect = await this.measure('#colorPad');
+    this.applyPadTouch(touch);
+  },
+
+  onPadMove(e) {
+    this.applyPadTouch(e.touches[0]);
+  },
+
+  async onHueStart(e) {
+    const touch = e.touches[0];
+    this._hueRect = await this.measure('#hueBar');
+    this.applyHueTouch(touch);
+  },
+
+  onHueMove(e) {
+    this.applyHueTouch(e.touches[0]);
+  },
+
+  /* ---------------------------- 日期 ---------------------------- */
+
+  onDateChange(e) {
+    const value = e.detail.value;
+    const text = exifParser.formatDate(value);
+    if (!text) return;
+    this.poster.dateText = text;
+    this.setData({ dateValue: value, dateText: text, dateManual: true });
+    this.render();
+  },
+
+  onDateReset() {
+    const auto = this.poster.autoDate;
+    if (!auto) return;
+    this.poster.dateText = auto.text;
+    this.setData({ dateValue: auto.value, dateText: auto.text, dateManual: false });
+    this.render();
   },
 
   onOpacityChanging(e) {

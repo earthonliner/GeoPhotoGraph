@@ -57,6 +57,46 @@ function luminance(hex) {
 }
 
 /**
+ * HSV -> "#RRGGBB"。h: 0~360，s / v: 0~1
+ */
+function hsvToHex(h, s, v) {
+  const hh = (((h % 360) + 360) % 360) / 60;
+  const c = v * s;
+  const x = c * (1 - Math.abs((hh % 2) - 1));
+  const m = v - c;
+  let rgb;
+  if (hh < 1) rgb = [c, x, 0];
+  else if (hh < 2) rgb = [x, c, 0];
+  else if (hh < 3) rgb = [0, c, x];
+  else if (hh < 4) rgb = [0, x, c];
+  else if (hh < 5) rgb = [x, 0, c];
+  else rgb = [c, 0, x];
+  const to = (n) => Math.round((n + m) * 255).toString(16).padStart(2, '0');
+  return `#${to(rgb[0])}${to(rgb[1])}${to(rgb[2])}`.toUpperCase();
+}
+
+/**
+ * "#RRGGBB" -> { h: 0~360, s: 0~1, v: 0~1 }
+ */
+function hexToHsv(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const d = max - Math.min(rn, gn, bn);
+  let h = 0;
+  if (d) {
+    if (max === rn) h = ((gn - bn) / d) % 6;
+    else if (max === gn) h = (bn - rn) / d + 2;
+    else h = (rn - gn) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  return { h, s: max ? d / max : 0, v: max };
+}
+
+/**
  * @param {string} id 预设 id 或 'custom'
  * @param {string} customHex 自定义颜色（id 为 custom 时使用）
  * @returns {{id:string, name:string, tint:string, dark:boolean, ink:string}}
@@ -83,6 +123,8 @@ module.exports = {
   DEFAULT_CUSTOM_HEX,
   parseHex,
   hexToRgba,
+  hsvToHex,
+  hexToHsv,
   luminance,
   resolveTheme
 };

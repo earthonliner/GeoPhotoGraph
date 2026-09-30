@@ -195,3 +195,24 @@ test('static map url uses dark style for dark themes', () => {
   assert.ok(light.includes('/light-v11/'));
   assert.ok(dark.includes('/dark-v11/'));
 });
+
+test('themes: hsv <-> hex round trip', () => {
+  assert.strictEqual(themes.hsvToHex(0, 1, 1), '#FF0000');
+  assert.strictEqual(themes.hsvToHex(120, 1, 1), '#00FF00');
+  assert.strictEqual(themes.hsvToHex(240, 1, 1), '#0000FF');
+  assert.strictEqual(themes.hsvToHex(0, 0, 1), '#FFFFFF');
+  assert.strictEqual(themes.hsvToHex(0, 0, 0), '#000000');
+  assert.strictEqual(themes.hsvToHex(360, 1, 1), '#FF0000');
+  for (const hex of ['#E8DFD0', '#0F1B2D', '#2B1218', '#6699CC', '#808080']) {
+    const { h, s, v } = themes.hexToHsv(hex);
+    assert.strictEqual(themes.hsvToHex(h, s, v), hex);
+  }
+});
+
+test('exif-parser: toDateValue for the date picker', () => {
+  assert.strictEqual(exif.toDateValue('2024:06:16 10:22:33'), '2024-06-16');
+  assert.strictEqual(exif.toDateValue(new Date(2024, 0, 5)), '2024-01-05');
+  assert.strictEqual(exif.toDateValue('2024:13:40 00:00:00'), '');
+  assert.strictEqual(exif.toDateValue(''), '');
+  assert.strictEqual(exif.formatDate('2024-01-05'), 'JAN 05, 2024');
+});

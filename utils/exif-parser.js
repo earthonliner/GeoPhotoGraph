@@ -231,6 +231,17 @@ function formatDate(input) {
   return `${MONTHS[month - 1]} ${String(day).padStart(2, '0')}, ${year}`;
 }
 
+/**
+ * "2024:06:16 10:22:33" | Date -> "2024-06-16"（供 <picker mode="date"> 使用），无法解析返回 ''
+ */
+function toDateValue(input) {
+  const pad = (n) => String(n).padStart(2, '0');
+  if (input instanceof Date) return `${input.getFullYear()}-${pad(input.getMonth() + 1)}-${pad(input.getDate())}`;
+  const m = /(\d{4})[:\-/](\d{1,2})[:\-/](\d{1,2})/.exec(String(input || ''));
+  if (!m || !formatDate(input)) return '';
+  return `${m[1]}-${pad(Number(m[2]))}-${pad(Number(m[3]))}`;
+}
+
 /* ------------------------------------------------------------------ */
 /* 对外接口                                                             */
 /* ------------------------------------------------------------------ */
@@ -311,6 +322,7 @@ async function extractFromFile(filePath) {
     longitude: hasGps ? exif.longitude : null,
     coordText: coords ? coords.text : '',
     dateText: exif && exif.dateTimeOriginal ? formatDate(exif.dateTimeOriginal) : '',
+    dateValue: exif && exif.dateTimeOriginal ? toDateValue(exif.dateTimeOriginal) : '',
     orientation: exif ? exif.orientation : null,
     raw: exif
   };
@@ -321,5 +333,6 @@ module.exports = {
   extractFromFile,
   dmsToDecimal,
   formatCoordinates,
-  formatDate
+  formatDate,
+  toDateValue
 };

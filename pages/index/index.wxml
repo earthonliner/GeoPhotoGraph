@@ -33,9 +33,18 @@
         <text class="meta-label">COORD</text>
         <text class="meta-value">{{hasLocation ? coordText : '未获取位置'}}</text>
       </view>
-      <view class="meta-row">
-        <text class="meta-label">DATE</text>
-        <text class="meta-value">{{dateText || '—'}}</text>
+      <picker mode="date" value="{{dateValue}}" start="1900-01-01" end="{{dateToday}}" bindchange="onDateChange">
+        <view class="meta-row">
+          <text class="meta-label">DATE</text>
+          <view class="date-value">
+            <text class="meta-value">{{dateText || '—'}}</text>
+            <text class="date-edit">修改</text>
+          </view>
+        </view>
+      </picker>
+      <view wx:if="{{dateManual}}" class="place-tools">
+        <text></text>
+        <text class="link" bindtap="onDateReset">恢复拍摄日期</text>
       </view>
       <button class="btn btn-ghost" hover-class="btn-hover" bindtap="onPickLocation">
         {{hasLocation ? '修改位置' : '手动选择位置'}}
@@ -135,6 +144,14 @@
         <text class="swatch-name {{item.id === mapColorId ? 'swatch-name-active' : ''}}">{{item.name}}</text>
       </view>
     </scroll-view>
+    <view wx:if="{{mapColorId === 'custom'}}" class="picker">
+      <view id="colorPad" class="pad" style="background-color:{{hueColor}};" bindtouchstart="onPadStart" catchtouchmove="onPadMove">
+        <view class="pad-cursor" style="{{padCursor}}"></view>
+      </view>
+      <view id="hueBar" class="hue" bindtouchstart="onHueStart" catchtouchmove="onHueMove">
+        <view class="hue-cursor" style="{{hueCursor}}background:{{hueColor}};"></view>
+      </view>
+    </view>
     <view wx:if="{{mapColorId === 'custom'}}" class="custom-row">
       <text class="meta-label">HEX</text>
       <input
