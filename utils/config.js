@@ -50,9 +50,13 @@ module.exports = {
     single: { name: '单张解锁', desc: '仅解锁当前这张照片', price: 129 }
   },
   payment: {
-    // 'mock'：开发调试，弹窗确认后直接视为支付成功（不产生任何扣款）
-    // 'cloud'：走云函数下单 + wx.requestPayment，见 utils/payment.js
+    // 'mock'：开发调试，弹窗确认后直接视为支付成功（不产生任何扣款），权益只存本地
+    // 'cloud'：微信云开发 + 云支付。下单、入账、额度扣减、邀请码都在云函数 api 里完成，
+    //          小程序端只保存服务端返回的权益快照。部署步骤见 README「接入微信支付」
     mode: 'mock',
-    cloud: { createOrder: 'createOrder', verifyInvite: 'verifyInvite' }
+    // env：云开发环境 ID；api：云函数名
+    cloud: { env: '', api: 'api' },
+    // 支付完成后向服务端确认到账的次数与间隔（回调可能稍有延迟）
+    confirm: { tries: 6, delayMs: 1000 }
   }
 };

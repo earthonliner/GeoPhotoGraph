@@ -1,11 +1,10 @@
 /**
- * 支付适配层。页面只关心 pay(order) 是否成功。
+ * 支付与权益适配层。页面只关心 pay / charge / redeemInvite / fetchEntitlement。
  *
- * mode = 'mock'：开发调试用，弹窗确认后视为支付成功，不产生任何扣款。
- * mode = 'cloud'：约定一个云函数 createOrder，入参 { kind: 'plan'|'single', planId }，
- *   返回 { orderId, payment }，其中 payment 为 wx.requestPayment 所需参数
- *   （timeStamp / nonceStr / package / signType / paySign），
- *   服务端应在支付回调后记录权益，并提供 verifyInvite 等接口做权益校验。
+ * mode = 'mock'：开发调试用，弹窗确认后视为支付成功，不产生任何扣款；权益由页面写本地缓存。
+ * mode = 'cloud'：微信云开发 + 云支付，全部走云函数 config.payment.cloud.api（cloudfunctions/api）：
+ *   createOrder 下单 -> wx.requestPayment 拉起收银台 -> syncOrder 向服务端确认到账（以服务端为准，
+ *   requestPayment 成功只表示用户完成了支付流程）；权益快照由服务端返回。
  */
 const config = require('./config');
 const membership = require('./membership');
@@ -14,6 +13,29 @@ function wxp(method, options) {
   return new Promise((resolve, reject) => {
     wx[method](Object.assign({}, options, { success: resolve, fail: reject }));
   });
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isMock() {
+  return config.payment.mode !== 'cloud';
+}
+
+async function callApi(action, data) {
+  if (!wx.cloud) throw new Error('cloud not enabled');
+  const res = await wx.cloud.callFunction({
+    name: config.payment.cloud.api,
+    data: Object.assign({ action }, data)
+  });
+  const result = res && res.result;
+  if (!result || typeof result !== 'object') throw new Error(`${action} failed`);
+  return result;
+}
+
+function apiError(result, fallback) {
+  const err = new Error((result && (result.message || result.code)) || fallback);
+  err.code = result && result.code;
+  return err;
 }
 
 async function payMock(order) {
@@ -27,40 +49,54 @@ async function payMock(order) {
 }
 
 async function payCloud(order) {
-  if (!wx.cloud) throw new Error('cloud not enabled');
-  const res = await wx.cloud.callFunction({
-    name: config.payment.cloud.createOrder,
-    data: { kind: order.kind, planId: order.planId }
-  });
-  const result = res && res.result;
-  if (!result || !result.payment) throw new Error('createOrder failed');
-  await wxp('requestPayment', result.payment);
-  return { ok: true, orderId: result.orderId };
+  const created = await callApi('createOrder', { kind: order.kind, planId: order.planId });
+  if (!created.ok || !created.payment) throw apiError(created, 'createOrder failed');
+  await wxp('requestPayment', created.payment);
+
+  const { tries, delayMs } = config.payment.confirm;
+  for (let i = 0; i < tries; i += 1) {
+    const r = await callApi('syncOrder', { orderId: created.orderId });
+    if (r.ok && r.status === 'paid') return { ok: true, orderId: created.orderId, state: membership.normalize(r.state) };
+    if (r.ok && r.status === 'failed') throw apiError(r, 'order failed');
+    if (i < tries - 1) await sleep(delayMs);
+  }
+  // 用户已付款但服务端还没收到微信的通知：稍后由 getEntitlement 补偿入账
+  return { ok: true, pending: true, orderId: created.orderId };
 }
 
 /**
  * @param order { kind: 'plan'|'single', planId?, title, priceText }
- * @returns Promise<{ ok: boolean }>  用户取消返回 ok:false，其余错误抛出
+ * @returns Promise<{ ok, state?, pending? }>  用户取消返回 ok:false，其余错误抛出
  */
 async function pay(order) {
   try {
-    return config.payment.mode === 'cloud' ? await payCloud(order) : await payMock(order);
+    return isMock() ? await payMock(order) : await payCloud(order);
   } catch (e) {
     if (/cancel/i.test((e && e.errMsg) || '')) return { ok: false };
     throw e;
   }
 }
 
-// 邀请码校验：mock 模式本地比对；cloud 模式交给云函数 verifyInvite（返回 { valid }）
-async function verifyInvite(code) {
-  if (config.payment.mode !== 'cloud') return membership.isValidInvite(code);
-  if (!wx.cloud) throw new Error('cloud not enabled');
-  const res = await wx.cloud.callFunction({ name: config.payment.cloud.verifyInvite, data: { code } });
-  return !!(res && res.result && res.result.valid);
+// 从服务端拉取权益快照（仅 cloud 模式）
+async function fetchEntitlement() {
+  const r = await callApi('getEntitlement');
+  if (!r.ok) throw apiError(r, 'getEntitlement failed');
+  return membership.normalize(r.state);
 }
 
-function isMock() {
-  return config.payment.mode !== 'cloud';
+// 保存前向服务端扣 1 张额度（cloud 模式）。key 相同只计费一次。额度不足时 ok 为 false
+async function charge(key) {
+  const r = await callApi('consume', { keys: [key] });
+  if (!r.ok && r.code !== 'insufficient') throw apiError(r, 'consume failed');
+  return { ok: !!r.ok, state: membership.normalize(r.state) };
 }
 
-module.exports = { pay, verifyInvite, isMock };
+// 兑换邀请码：mock 本地比对；cloud 由服务端校验并记录，返回最新权益
+async function redeemInvite(code) {
+  if (isMock()) return { valid: membership.isValidInvite(code) };
+  const r = await callApi('redeemInvite', { code });
+  if (!r.ok) throw apiError(r, 'redeemInvite failed');
+  return { valid: !!r.valid, tooMany: r.code === 'too_many_attempts', state: membership.normalize(r.state) };
+}
+
+module.exports = { pay, charge, redeemInvite, fetchEntitlement, isMock };

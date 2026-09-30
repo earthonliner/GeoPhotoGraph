@@ -359,14 +359,14 @@ test('membership: state persists through storage and ignores garbage', () => {
   const m = require('../utils/membership');
   const data = {};
   const storage = { get: (k) => data[k], set: (k, v) => { data[k] = v; } };
-  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, freeUsed: 0, packs: [] });
-  const state = { invite: true, bought: true, freeUsed: 1, packs: [{ planId: 'month', quota: 120, used: 3, until: 999 }] };
+  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, freeUsed: 0, singles: 0, packs: [] });
+  const state = { invite: true, bought: true, freeUsed: 1, singles: 2, packs: [{ planId: 'month', quota: 120, used: 3, until: 999 }] };
   m.save(state, storage);
   assert.deepStrictEqual(m.load(storage), state);
   data['geopics.membership'] = 'oops';
-  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, freeUsed: 0, packs: [] });
+  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, freeUsed: 0, singles: 0, packs: [] });
   data['geopics.membership'] = { invite: false, until: 123 };
-  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, freeUsed: 0, packs: [] });
+  assert.deepStrictEqual(m.load(storage), { invite: false, bought: false, freeUsed: 0, singles: 0, packs: [] });
 });
 
 test('place-name: long city names drop German/English qualifiers', () => {
