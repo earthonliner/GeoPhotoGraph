@@ -1633,11 +1633,12 @@ Page({
         ? `本次需下载 ${items.length} 张，剩余额度只够 ${allowed.length} 张。`
         : `免费额度只够 ${allowed.length} 张，其余 ${blocked.length} 张带水印，无法下载。`;
       if (buy) notice += bought ? `购买额外的月度或年度会员可继续下载其余 ${blocked.length} 张。` : '开通会员可继续下载。';
+      // 按钮文字最多 4 个字符，超出时 showModal 直接失败，张数只能放在正文里
       const res = await wxp('showModal', {
         title: bought ? '会员额度不足' : '部分照片未解锁',
         content: `${notice}\n是否仅下载可下载的 ${allowed.length} 张？`,
-        confirmText: `仅下载 ${allowed.length} 张`,
-        cancelText: buy ? (bought ? '购买额外会员' : '去解锁') : '取消',
+        confirmText: '仅下载',
+        cancelText: buy ? (bought ? '购买会员' : '去解锁') : '取消',
         confirmColor: TINT
       }).catch(() => ({ confirm: false }));
       if (!res.confirm) {
