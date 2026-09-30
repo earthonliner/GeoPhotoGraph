@@ -1876,7 +1876,7 @@ Page({
       return;
     }
 
-    this.showBusy('读取照片信息…');
+    this.showBusy('读取并处理照片…');
     const baseTemplate = this.poster.templateId;
     const created = [];
     for (const filePath of files) {
@@ -1889,6 +1889,7 @@ Page({
       item.dateText = item.autoDate.text;
       item.dateValue = item.autoDate.value;
       item.exif = exif;
+      item.photoPath = await this.prepareImage(filePath);
       created.push(item);
     }
 
@@ -1934,6 +1935,28 @@ Page({
         showCancel: false,
         confirmColor: '#111111'
       }).catch(() => {});
+    }
+  },
+
+  // 原图像素过大时，部分机型的 canvas 只能解码出上半部分，下半部分变成竖向拖影。
+  // 导入时先等比压缩到长边 maxSide 以内（EXIF 已在压缩前从原图读取）；失败则退回原图
+  async prepareImage(filePath) {
+    const { maxSide, quality } = appConfig.image;
+    try {
+      const info = await wxp('getImageInfo', { src: filePath });
+      const long = Math.max(info.width, info.height);
+      if (!(long > maxSide)) return filePath;
+      const k = maxSide / long;
+      const res = await wxp('compressImage', {
+        src: filePath,
+        quality,
+        compressedWidth: Math.round(info.width * k),
+        compressedHeight: Math.round(info.height * k)
+      });
+      return res.tempFilePath || filePath;
+    } catch (e) {
+      console.warn('prepare image failed, using original', e);
+      return filePath;
     }
   },
 
