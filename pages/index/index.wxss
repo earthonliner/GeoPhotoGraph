@@ -11,15 +11,6 @@
   padding-bottom: calc(200rpx + env(safe-area-inset-bottom));
 }
 
-.tap-dim {
-  opacity: 0.6;
-}
-
-.link {
-  font-size: 26rpx;
-  color: #007aff;
-}
-
 .ph {
   color: #c7c7cc;
   font-weight: 400;
@@ -194,24 +185,7 @@
   color: #c93400;
 }
 
-/* 分组 */
-.section {
-  margin-top: 56rpx;
-}
-
-.section-head {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  padding: 0 32rpx 14rpx;
-}
-
-.section-title {
-  font-size: 26rpx;
-  line-height: 36rpx;
-  color: #6d6d72;
-}
-
+/* 分组（基础的分组列表样式在 app.wxss） */
 .section-action {
   font-size: 28rpx;
   line-height: 36rpx;
@@ -225,14 +199,6 @@
   letter-spacing: 1rpx;
 }
 
-.section-foot {
-  display: block;
-  padding: 14rpx 32rpx 0;
-  font-size: 24rpx;
-  line-height: 36rpx;
-  color: #8e8e93;
-}
-
 .section-links {
   display: flex;
   flex-wrap: wrap;
@@ -244,58 +210,8 @@
   line-height: 40rpx;
 }
 
-.group {
-  overflow: hidden;
-  border-radius: 20rpx;
-  background: #fff;
-}
-
-.cell {
-  position: relative;
-  display: flex;
-  align-items: center;
-  min-height: 88rpx;
-  padding: 0 32rpx;
-  box-sizing: border-box;
-}
-
-/* 发丝分隔线：从文字起始处开始，与 iOS 列表一致 */
-.cell-line::before {
-  content: '';
-  position: absolute;
-  left: 32rpx;
-  right: 0;
-  top: 0;
-  height: 1px;
-  background: rgba(60, 60, 67, 0.29);
-  transform: scaleY(0.5);
-  transform-origin: 0 0;
-}
-
-.cell-hover {
-  background: #e5e5ea;
-}
-
-.cell-label {
-  flex-shrink: 0;
-  font-size: 32rpx;
-  color: #1c1c1e;
-}
-
 .cell-label-short {
   width: 72rpx;
-}
-
-.cell-value {
-  flex: 1;
-  min-width: 0;
-  margin-left: 24rpx;
-  text-align: right;
-  font-size: 30rpx;
-  color: #8e8e93;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .cell-value-tint {
@@ -342,16 +258,6 @@
 /* 内置 switch 自带 5px 右外边距，去掉后与其他行的右侧内容对齐 */
 .cell-switch .wx-switch-input {
   margin-right: 0;
-}
-
-.chevron {
-  flex-shrink: 0;
-  width: 14rpx;
-  height: 14rpx;
-  margin: 0 4rpx 0 20rpx;
-  border-top: 4rpx solid #c7c7cc;
-  border-right: 4rpx solid #c7c7cc;
-  transform: rotate(45deg);
 }
 
 /* iOS 紧凑型日期选择器样式 */
@@ -932,32 +838,6 @@
   font-size: 24rpx;
   line-height: 36rpx;
   color: #6d6d72;
-}
-
-.cell-tall {
-  min-height: 128rpx;
-}
-
-.cell-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 22rpx 0;
-}
-
-.cell-title {
-  font-size: 32rpx;
-  line-height: 44rpx;
-  font-weight: 600;
-  color: #1c1c1e;
-}
-
-.cell-sub {
-  margin-top: 4rpx;
-  font-size: 26rpx;
-  line-height: 36rpx;
-  color: #8e8e93;
 }
 
 .cell-title-row {
