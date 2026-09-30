@@ -1490,6 +1490,9 @@ Page({
     footerOn: true,
     exportSize: '',
     isMember: false,
+    freeLeft: 0,
+    previewCovered: false,
+    coverImage: '',
     memberLabel: '',
     memberChip: '',
     currentLocked: true,
@@ -1724,14 +1727,15 @@ Page({
 
   /* ---------------------------- 会员 / 水印 / 付费 ---------------------------- */
 
-  // 这张照片已解锁（单张付费 / 已消耗过额度），或会员还有剩余额度 => 无水印且可下载
+  // 这张照片已解锁（单张付费 / 已消耗过额度），或还有免费 / 会员额度 => 无水印且可下载
   isEntitled(item) {
-    return !!item.unlocked || membership.remainingQuota(this.member) > 0;
+    return !!item.unlocked || membership.availableQuota(this.member) > 0;
   },
 
   memberView() {
     return {
       isMember: membership.remainingQuota(this.member) > 0,
+      freeLeft: membership.remainingQuota(this.member) > 0 ? 0 : membership.freeRemaining(this.member),
       memberLabel: membership.label(this.member),
       memberChip: membership.chipLabel(this.member),
       packLines: membership.packLines(this.member, appConfig.membership.plans)
@@ -1740,7 +1744,7 @@ Page({
 
   // 一次下载要处理的照片中，哪些可以下载、哪些被额度 / 水印拦下
   splitByEntitlement(items) {
-    let remaining = membership.remainingQuota(this.member);
+    let remaining = membership.availableQuota(this.member);
     const allowed = [];
     const blocked = [];
     items.forEach((it) => {
@@ -1771,20 +1775,47 @@ Page({
     this.render();
   },
 
-  openPaywall(resume, notice) {
+  // 原生 canvas 的层级高于普通节点，会盖在弹层上方：弹层出现前先把预览截成图片顶替，并隐藏 canvas
+  async coverPreview() {
+    if (this.data.previewCovered) return;
+    let coverImage = '';
+    if (this.preview) {
+      try {
+        ({ tempFilePath: coverImage } = await wxp('canvasToTempFilePath', {
+          canvas: this.preview,
+          fileType: 'jpg',
+          quality: 0.92
+        }));
+      } catch (e) {
+        console.error('snapshot preview failed', e);
+      }
+    }
+    this.setData({ previewCovered: true, coverImage });
+  },
+
+  // 弹层都关闭后恢复 canvas 并重绘（隐藏期间的绘制不一定生效）
+  uncoverPreview() {
+    if (!this.data.previewCovered || this.data.paywallVisible || this.data.searchVisible) return;
+    this.setData({ previewCovered: false, coverImage: '' });
+    this.render();
+  },
+
+  async openPaywall(resume, notice) {
     this._afterUnlock = resume || null;
+    await this.coverPreview();
     this.setData(
       Object.assign(this.memberView(), { paywallVisible: true, paywallNotice: notice || '', inviteInput: '', inviteError: '' })
     );
   },
 
   onOpenPaywall() {
-    this.openPaywall(null);
+    return this.openPaywall(null);
   },
 
   onPaywallClose() {
     this._afterUnlock = null;
     this.setData({ paywallVisible: false });
+    this.uncoverPreview();
   },
 
   // 权益生效后关闭付费面板，并继续刚才被拦下的操作
@@ -1792,6 +1823,7 @@ Page({
     const resume = this._afterUnlock;
     this._afterUnlock = null;
     this.setData({ paywallVisible: false });
+    this.uncoverPreview();
     this.refreshEntitlement();
     wx.showToast({ title: toast, icon: 'success' });
     if (resume) setTimeout(resume, 400);
@@ -2135,6 +2167,7 @@ Page({
       return;
     }
     if (tapIndex === 0) {
+      await this.coverPreview();
       this.setData({ searchVisible: true, searchKeyword: '', searchResults: [], searching: false, searchEmpty: false });
     } else {
       await this.pickWithWechatMap();
@@ -2166,6 +2199,7 @@ Page({
     this._searchId += 1;
     clearTimeout(this._searchTimer);
     this.setData({ searchVisible: false, searching: false });
+    this.uncoverPreview();
   },
 
   onSearchInput(e) {
@@ -2766,17 +2800,18 @@ Page({
     if (this.data.busy || !items.length) return;
     const { allowed, blocked } = this.splitByEntitlement(items);
     const bought = this.member.bought;
+    const freeTotal = appConfig.membership.freeQuota;
     const exhausted = bought
       ? '额度已用完或已到期，购买额外的月度或年度会员即可继续下载。'
-      : '';
+      : `${freeTotal} 张免费额度已用完，开通会员即可继续下载。`;
     if (!allowed.length) {
-      this.openPaywall(resume, exhausted);
+      await this.openPaywall(resume, exhausted);
       return;
     }
     if (blocked.length) {
       const notice = bought
         ? `本次需下载 ${items.length} 张，剩余额度只够 ${allowed.length} 张。购买额外的月度或年度会员可继续下载其余 ${blocked.length} 张。`
-        : `有 ${blocked.length} 张照片未解锁（带水印，无法下载）。`;
+        : `免费额度只够 ${allowed.length} 张，其余 ${blocked.length} 张带水印，无法下载。开通会员可继续下载。`;
       const res = await wxp('showModal', {
         title: bought ? '会员额度不足' : '部分照片未解锁',
         content: `${notice}\n是否仅下载可下载的 ${allowed.length} 张？`,
@@ -2785,7 +2820,7 @@ Page({
         confirmColor: TINT
       }).catch(() => ({ confirm: false }));
       if (!res.confirm) {
-        this.openPaywall(resume, bought ? notice : '');
+        await this.openPaywall(resume, notice);
         return;
       }
     }
