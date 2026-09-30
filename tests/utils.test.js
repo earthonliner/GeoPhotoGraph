@@ -87,6 +87,7 @@ test('formatters', () => {
 });
 
 test('static map url', () => {
+  config.mapbox.token = '';
   assert.strictEqual(mapService.buildStaticMapUrl({ lat: 1, lon: 2, width: 100, height: 100 }), '');
   config.mapbox.token = 'pk.test';
   const url = mapService.buildStaticMapUrl({ lat: 46.0192, lon: 7.7459, zoom: 12, width: 600, height: 800 });

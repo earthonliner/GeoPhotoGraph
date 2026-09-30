@@ -8,8 +8,10 @@
  * token 为空时：不会请求地图与逆地理编码，海报使用本地绘制的极简底图，
  * 地名显示为经纬度占位，便于本地无网络调试。
  */
-// 在此填入 Mapbox Public Token（pk.…）。注意不要提交真实 token 到公开仓库。
-const MAPBOX_TOKEN = '';
+// Mapbox Public Token（pk.…）。仓库是公开的，GitHub 会拦截含 token 的提交，
+// 所以真实 token 写在同目录的 config.local.js 里（本地文件，不要提交）。
+// 在 Mapbox 账号里为 token 设置 URL 限制，仅允许 https://servicewechat.com/ 开头的来源。
+const MAPBOX_TOKEN = require('./config.local').mapboxToken || '';
 
 module.exports = {
   mapbox: {
@@ -34,12 +36,13 @@ module.exports = {
     // 海报底端品牌栏：GEOPICS 标识 + 小程序码。
     // qrcode 填入小程序码图片路径（在小程序后台「设置 → 基本设置 / 开发管理」下载，放到 assets/ 下），
     // 例如 '/assets/miniprogram-code.png'；留空或文件不存在时，底栏只显示居中的 GEOPICS 标志与字标
-    qrcode: '',
+    qrcode: '/assets/miniprogram-code.png',
     tagline: 'MAP YOUR MOMENT'
   },
   membership: {
-    // 邀请码（不区分大小写）。仅在客户端校验，正式上线请改为服务端校验（见 README「会员」）
-    inviteCodes: ['geo0930'],
+    // 邀请码（不区分大小写）。仅 mock 模式在客户端校验；cloud 模式下邀请码在云函数环境变量
+    // INVITE_CODES 里配置并由服务端校验，这里保持为空，避免码被打进小程序包
+    inviteCodes: [],
     // 每位用户的免费额度（张）：保存一张无水印海报消耗 1 张，用完后预览恢复水印且不可下载
     freeQuota: 2,
     // price 单位：分；quota 为有效期内可下载的无水印海报张数，可多次购买叠加
@@ -53,7 +56,7 @@ module.exports = {
     // 'mock'：开发调试，弹窗确认后直接视为支付成功（不产生任何扣款），权益只存本地
     // 'cloud'：微信云开发 + 云支付。下单、入账、额度扣减、邀请码都在云函数 api 里完成，
     //          小程序端只保存服务端返回的权益快照。部署步骤见 README「接入微信支付」
-    mode: 'mock',
+    mode: 'cloud',
     // env：云开发环境 ID；api：云函数名
     cloud: { env: '', api: 'api' },
     // 支付完成后向服务端确认到账的次数与间隔（回调可能稍有延迟）
