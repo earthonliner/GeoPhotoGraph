@@ -16,7 +16,7 @@ function platform() {
   }
 }
 
-// iOS 端受平台规范限制，默认不在小程序内售卖虚拟商品（会员 / 单张解锁）。
+// iOS 端只能通过虚拟支付（Apple 支付）售卖虚拟商品（会员 / 单张解锁），由 config.payment.iosPurchase 控制入口。
 // 开发者工具的 platform 为 devtools，不受影响，方便调试
 function canPurchase() {
   return platform() !== 'ios' || config.payment.iosPurchase === true;

@@ -8,10 +8,14 @@ const { createHandler } = require('../cloudfunctions/api/handler');
 const { createFakeCloud } = require('./helpers/fake-cloud');
 
 const NOW = Date.UTC(2026, 8, 30, 12, 0, 0);
-const ENV = { SUB_MCH_ID: '1900000001', INVITE_CODES: 'Geo0930, spare-code' };
+const ENV = { PAY_CHANNEL: 'jsapi', SUB_MCH_ID: '1900000001', INVITE_CODES: 'Geo0930, spare-code' };
+
+// 微信侧已收到的付款（订单号 -> 金额）。notify() 构造通知的同时记录一笔付款，
+// 云函数入账前向微信查单时才查得到；没有付款记录的“通知”属于伪造
+const ledger = {};
 
 function setup(extraEnv, clock) {
-  const fake = createFakeCloud();
+  const fake = createFakeCloud({ ledger });
   let t = NOW;
   const main = createHandler({ cloud: fake.cloud, env: Object.assign({}, ENV, extraEnv), now: () => (clock ? clock() : t) , random: Math.random });
   return { fake, main, advance: (ms) => { t += ms; } };
@@ -29,8 +33,10 @@ async function consumeMany(main, prefix, n, tpl) {
 }
 
 // 模拟微信在用户支付成功后向云函数发送的结果通知
-const notify = (orderId, totalFee, extra) =>
-  Object.assign({ returnCode: 'SUCCESS', resultCode: 'SUCCESS', outTradeNo: orderId, totalFee, transactionId: `wx-${orderId}` }, extra);
+const notify = (orderId, totalFee, extra) => {
+  ledger[orderId] = totalFee;
+  return Object.assign({ returnCode: 'SUCCESS', resultCode: 'SUCCESS', outTradeNo: orderId, totalFee, transactionId: `wx-${orderId}` }, extra);
+};
 
 test('catalog: server prices, quotas and free tier match the mini program config', () => {
   const { plans, single, lifetime, free } = config.membership;
@@ -220,6 +226,16 @@ test('api: notifications with a wrong amount, unknown order or failure grant not
   assert.strictEqual((await main({ returnCode: 'FAIL', outTradeNo: orderId })).errmsg, 'ignored');
   assert.strictEqual((await main({ returnCode: 'SUCCESS', resultCode: 'FAIL', outTradeNo: orderId })).errmsg, 'ignored');
   assert.strictEqual(fake.dump().users['openid-a'].packs.length, 0);
+});
+
+test('api: a forged payment notification without a real payment grants nothing', async () => {
+  const { main, fake } = setup();
+  const { orderId } = await main({ action: 'createOrder', kind: 'lifetime' });
+  const forged = { returnCode: 'SUCCESS', resultCode: 'SUCCESS', outTradeNo: orderId, totalFee: 29900, transactionId: 'fake' };
+  assert.deepStrictEqual(await main(forged), { errcode: 0, errmsg: 'OK' });
+  assert.strictEqual((await main({ action: 'getEntitlement' })).state.lifetime, null);
+  assert.strictEqual(fake.dump().orders[orderId].status, 'pending');
+  assert.strictEqual(fake.dump().users['openid-a'].bought, false);
 });
 
 test('api: single unlock adds one save, spent last and without membership perks', async () => {

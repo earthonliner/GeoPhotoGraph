@@ -11,5 +11,7 @@ module.exports = {
   },
   // 买断：永久有效，每自然月 monthly 张
   lifetime: { id: 'lifetime', name: '买断会员', price: 29900, monthly: 120 },
-  single: { name: '单张解锁', price: 129, quota: 1 }
+  single: { name: '单张解锁', price: 129, quota: 1 },
+  // 虚拟支付「道具管理」里的道具 ID。道具的价格必须与上面的 price 完全一致（iOS / Android 共用）
+  productIds: { month: 'geopics_month', year: 'geopics_year', lifetime: 'geopics_lifetime', single: 'geopics_single' }
 };

@@ -8,7 +8,7 @@
 .
 ├── app.js / app.json / app.wxss / sitemap.json   # 小程序入口与全局配置；app.wxss 含全局字体配色与两个页面共用的 iOS 分组列表样式
 ├── project.config.json                            # 开发者工具配置；cloudfunctionRoot 指向 cloudfunctions/
-├── cloudfunctions/api/    # 云函数（云开发）：微信支付下单 / 回调、权益、额度扣减、邀请码，不会打进小程序包
+├── cloudfunctions/api/    # 云函数（云开发）：虚拟支付下单签名 / 推送入账 / 查单 / 退款、权益、额度扣减、邀请码，不会打进小程序包
 ├── utils/
 │   ├── config.js          # Mapbox 样式、会员价格与额度、支付模式等配置（token 在 config.local.js）
 │   ├── exif-parser.js     # ArrayBuffer EXIF 解析：GPS(DMS→十进制)、拍摄日期、方向
@@ -17,8 +17,8 @@
 │   │                      #   overlay（水印 / 品牌底栏）、tpl-minimal / map / editorial / travel / culture 五个模板族
 │   ├── batch.js           # 批量上限与随机模板：洗牌发牌，一轮内不重复
 │   ├── membership.js      # 会员状态：每月免费额度 / 单张 / 额度包 / 买断（本地快照）、批量权限、扣减、到期与文案
-│   ├── payment.js         # 支付与权益适配层：mock（开发）/ cloud（调用云函数 api）
-│   ├── platform.js        # 运行环境：平台（iOS 购买限制）、朋友圈单页模式、开发版 / 体验版 / 正式版
+│   ├── payment.js         # 支付与权益适配层：mock（开发）/ cloud（调用云函数 api，wx.requestVirtualPayment）
+│   ├── platform.js        # 运行环境：平台（iOS 购买入口开关）、朋友圈单页模式、开发版 / 体验版 / 正式版
 │   ├── themes.js          # 地图配色预设与自定义颜色解析
 │   ├── place-name.js      # 地名规范化：英文 / 中文，汉字短名转拼音、长名转首字母缩写
 │   └── pinyin-data.js     # 汉字→拼音数据（由 pinyin-pro 生成）
@@ -120,51 +120,57 @@
 - **会员**的定义：邀请码、买断、或仍在有效期内的月度 / 年度（额度用完也算，只是暂时不能下载）。批量导入与批量下载只对会员开放。
 - **超出额度**：保存时额度不足会询问是否「仅下载」额度内的部分，或「去解锁 / 购买会员」打开付费面板；额度完全用完则直接打开付费面板并提醒（买断会员会提示下月 1 日重置）。购买成功后自动继续刚才的下载。（`wx.showModal` 的按钮文字最多 4 个字符，超出时弹窗会直接失败，张数因此写在正文里。）
 - 预览下方的一行提示说明当前模板为什么带水印，或拍立得本月免费剩余张数；部分照片已解锁时，未解锁的缩略图带“水印”标记；大标题右侧的胶囊显示当前状态（如“免费 · 10 张”“开通会员”“会员 · 117 张”），点击可打开付费面板查看各额度的剩余与到期时间。
-- **iOS**：`payment.iosPurchase` 默认为 `false`：iOS 上付费面板只显示「由于相关规范，iOS 暂不支持在小程序内购买」、当前额度与邀请码兑换，不显示价格与购买按钮，各处文案（包括批量提示）也不带“开通 / 续购 / 买断”等引导；已有权益（包括在其他设备购买的）照常使用。合规的 iOS 方案见下文「iOS 合规接入」，接入后再改为 `true`。开发者工具的平台为 `devtools`，不受此限制。
+- **iOS**：使用虚拟支付（见下文）时 iOS 走 Apple 支付，购买入口与安卓一致，`payment.iosPurchase` 默认 `true`。若虚拟支付还没开通（或云函数改用 `PAY_CHANNEL=jsapi` 的云支付），必须把它改为 `false`：此时 iOS 上付费面板只显示「由于相关规范，iOS 暂不支持在小程序内购买」、当前额度与邀请码兑换，不显示价格与购买按钮，各处文案也不带“开通 / 续购 / 买断”等引导；已有权益（包括在其他设备购买的）照常使用。开发者工具的平台为 `devtools`，不受此限制。iOS 购买的退款由用户在 Apple 申请，帮助页在 iOS 上会多一条说明。
 
-### 接入微信支付（云开发方案）
+### 接入支付（小程序虚拟支付，含 iOS）
 
-代码里已包含完整链路：小程序 `utils/payment.js` ⇄ 云函数 `cloudfunctions/api`（微信云开发 + 云支付）。配置文件当前已是 `cloud`；云函数尚未部署时无法保存无水印海报，本地调试请临时改回 `mock`。
+按微信官方规则，小程序内销售虚拟商品（会员、解锁功能等）要接入**小程序虚拟支付**，统一调用 `wx.requestVirtualPayment`：**iOS 走 Apple 支付，Android 等其他平台走微信支付**，同一套代码。链路：小程序 `utils/payment.js` ⇄ 云函数 `cloudfunctions/api`（`handler.js` 业务、`xpay.js` 签名与查单）。配置文件当前是 `payment.mode = 'cloud'`；云函数尚未部署时无法保存无水印海报，本地调试请临时改回 `mock`。
 
 **流程**
 
-1. 用户点购买 → `createOrder`：云函数按**服务端商品目录**（`cloudfunctions/api/catalog.js`，价格不取自客户端）写入订单（`orders`）并调用 `cloudPay.unifiedOrder`，返回支付参数。
-2. 小程序 `wx.requestPayment` 拉起收银台。
-3. 微信把结果通知发给云函数（回调），云函数校验金额后**在一个数据库事务里**把订单置为已支付并发放权益（月度 / 年度加一包额度，买断记录每月额度，单张加 1 次单张额度；买断已拥有时 `createOrder` 返回 `already_owned`，重复支付不会覆盖已有记录），重复通知不会重复发放。
-4. 小程序随后调用 `syncOrder` 向服务端确认，以服务端返回的权益快照为准。`requestPayment` 成功只表示用户走完了支付流程，本地不会据此发放权益；若回调稍有延迟，会提示“支付结果确认中”，并在稍后 / 回到页面时自动同步。回调丢失时，`syncOrder` / `getEntitlement` 会主动 `queryOrder` 查单补偿。
-5. 保存海报前，小程序向云函数 `consume` 扣 1 张额度（`items: [{ key, tpl }]`，顺序见上文「额度规则」），额度不足服务端会拒绝，页面弹出付费面板。`tpl` 是海报所用的模板，服务端据此判断能否使用免费额度；计费键为“本次打开小程序 + 照片序号 + 模板”，同一张照片同一模板重试不重复扣。批量限制只在客户端判断，服务端无法区分一次批量还是多次单张。
+1. 用户点购买 → 小程序 `wx.login` 取 `code`，调 `createOrder`：云函数按**服务端商品目录**（`cloudfunctions/api/catalog.js`，价格与道具 ID 都不取自客户端）写入订单（`orders`），用 `code` 换 `session_key`（并核对 openid 与调用者一致），返回 `signData`（道具直购：`productId`、`goodsPrice`、`outTradeNo`、`attach` 等）、`paySig`（AppKey 签名）与 `signature`（session_key 签名）。密钥只在云函数里。
+2. 小程序调 `wx.requestVirtualPayment({ mode: 'short_series_goods', signData, paySig, signature })` 拉起支付（iOS 是 Apple 支付面板）。先检查 iOS 微信 ≥ 8.0.68 与接口可用，不满足则提示「需要更新微信」，不发起支付。
+3. 支付成功后微信向云函数推送 `xpay_goods_deliver_notify`（发货推送）。**推送里的内容不被直接采信**：云函数会用 `/xpay/query_order` 向微信查单，确认订单状态为已支付、金额等于目录价格，再在一个数据库事务里把订单置为已支付并发放权益（月度 / 年度加一包额度，买断记录每月额度，单张加 1 次单张额度；买断已拥有时 `createOrder` 返回 `already_owned`，重复支付或重复推送不会重复发放）。所以任何人伪造请求调用云函数都不能白拿权益；查单失败时返回非 0，微信会重试（最多 15 次）。
+4. 小程序随后调用 `syncOrder` 向服务端确认，以服务端返回的权益快照为准。`requestVirtualPayment` 的 success 只表示用户走完了支付流程（甚至可能因微信退出而收不到），本地不会据此发放权益；若推送稍有延迟（Apple 支付可能更慢），会提示“支付结果确认中”，并在稍后 / 回到页面时自动同步。推送丢失时，`syncOrder` / `getEntitlement` 会主动 `query_order` 查单补偿。
+5. **退款**：收到 `xpay_refund_notify` 后云函数同样先向微信查单，确认订单确已退款（状态 5 / 8），再收回该订单发放的权益（额度包 / 买断记录 / 1 次单张额度），订单标为 `refunded`。Android 由开发者在虚拟支付后台发起退款；iOS 只能由用户在 Apple 申请，Apple 批准后才会推送。
+6. 保存海报前，小程序向云函数 `consume` 扣 1 张额度（`items: [{ key, tpl }]`，顺序见上文「额度规则」），额度不足服务端会拒绝，页面弹出付费面板。`tpl` 是海报所用的模板，服务端据此判断能否使用免费额度；计费键为“本次打开小程序 + 照片序号 + 模板”，同一张照片同一模板重试不重复扣。批量限制只在客户端判断，服务端无法区分一次批量还是多次单张。
 
-**部署步骤**
+**开通与部署步骤**
 
-1. **主体与商户号**：小程序主体须为企业 / 个体工商户。在微信支付商户平台申请商户号并关联小程序 AppID；再到云开发控制台开通「微信支付」，获得**子商户号**（`SUB_MCH_ID`）。
-2. **开通云开发**：开发者工具里创建云开发环境，记下环境 ID，填入 `utils/config.js` 的 `payment.cloud.env`。
-3. **数据库**：创建集合 `users` 与 `orders`，权限都设为**所有用户不可读写**（云函数不受限制），避免小程序端直接改额度或订单。
-4. **云函数**：右键 `cloudfunctions/api` 选“上传并部署：云端安装依赖”。在云开发控制台该函数的环境变量里设置：
-   - `SUB_MCH_ID`：云支付子商户号（必填）
+1. **主体与开通**：小程序须已认证，主体为企业 / 事业单位 / 个体工商户（个人主体有单独的「虚拟支付：个人」文档，要求服务类目含「工具」并完成认证与备案）。在小程序后台左侧「虚拟支付」开通并签约，得到 `OfferID` 与现网 / 沙箱 `AppKey`（「虚拟支付 → 基本配置 → 基础配置」）。
+2. **iOS（Apple 支付）**：在「账号设置 → 基本信息」配置**小程序简称**，在「虚拟支付 → 基本配置」开通 **Apple IAP**。iOS 用户需要 iOS 15+、微信 8.0.68+、中国大陆 App Store 账户，最低支付金额 1 元（本产品最低 ¥1.29）。Apple 支付没有沙箱，只能用现网验证。
+3. **道具管理**：在虚拟支付后台「道具管理」创建并**发布** 4 个道具，ID 与价格必须和 `catalog.js` 一致（iOS / Android 共用，发布后需等待生效）：
+
+   | 道具 ID | 对应商品 | 价格 |
+   | --- | --- | --- |
+   | `geopics_month` | 月度会员 | ¥14.9 |
+   | `geopics_year` | 年度会员 | ¥109.9 |
+   | `geopics_lifetime` | 买断会员 | ¥299 |
+   | `geopics_single` | 单张解锁 | ¥1.29 |
+
+   如果后台提示某个价格不在 Apple 支持的价格档位内，以后台允许的价格为准，同时改 `catalog.js` 与 `utils/config.js`。手续费：Android 约 1%，iOS 由 Apple 收取约 12%（以官方最新规则为准）；Android 结算约 T+3，iOS 周期更长。
+4. **开通云开发**：开发者工具里创建云开发环境，记下环境 ID，填入 `utils/config.js` 的 `payment.cloud.env`。
+5. **数据库**：创建集合 `users` 与 `orders`，权限都设为**所有用户不可读写**（云函数不受限制），避免小程序端直接改额度或订单。
+6. **云函数**：右键 `cloudfunctions/api` 选“上传并部署：云端安装依赖”。在云开发控制台该函数的环境变量里设置（**都不要写进代码库**）：
+   - `XPAY_OFFER_ID`：虚拟支付 OfferID
+   - `XPAY_APP_KEY`：与 `XPAY_ENV` 对应的 AppKey（现网用现网 AppKey，沙箱用沙箱 AppKey）
+   - `XPAY_ENV`：`0` 现网（默认），`1` 沙箱
+   - `WX_APPID`、`WX_APPSECRET`：小程序 AppID 与 AppSecret，用于 `code2Session` 换 `session_key` 和获取 `access_token`（查单）
    - `INVITE_CODES`：邀请码，多个用英文逗号分隔（如 `geo0930`）
-   - `ENV_ID`、`PAY_CALLBACK_FUNCTION`：可选，默认当前环境和函数 `api`
-5. **切换模式**：`utils/config.js` 里 `payment.mode` 改为 `'cloud'`，并把 `membership.inviteCodes` 清空（cloud 模式不再读它）。
-6. **测试**：把 `cloudfunctions/api/catalog.js` 和 `utils/config.js` 里的价格同时临时改成 1 分钱，用体验版 + 体验成员真实支付、再在商户平台退款；小程序不能用微信支付沙箱。确认订单变为 `paid`、`users` 里额度正确、重复发送回调不会重复加额度。改回正式价格后再提审。
+   - `PAY_CHANNEL`：可不填，默认 `virtual`；填 `jsapi` 则改用旧的云支付（需 `SUB_MCH_ID` 等，且不含 iOS，此时务必把 `payment.iosPurchase` 改为 `false`）
+7. **消息推送**：开发者工具「云开发 → 设置 → 其他设置 → 消息推送」，推送模式选「云函数」，添加配置：消息类型 `event`，事件类型选 `xpay_goods_deliver_notify`（发货）和 `xpay_refund_notify`（退款），云函数选 `api`。（也可在小程序后台「开发管理 → 消息推送」配置到你自己的服务器，但云函数更省事。）
+8. **切换模式**：`utils/config.js` 里 `payment.mode` 为 `'cloud'`，`membership.inviteCodes` 清空（cloud 模式不再读它）。
+9. **测试**：虚拟支付的现网支付是真实扣款。先把 `catalog.js` 与 `utils/config.js` 里的价格和道具价格一起临时改成最低价，用体验版 + 体验成员在 **iOS 和 Android 各走一遍**：下单 → 支付 → 确认订单变为 `paid`、`users` 里额度正确、重复推送不会重复加额度；再在后台退款，确认额度被收回。改回正式价格、重新发布道具后再提审。
 
 价格、额度、免费张数必须在 `catalog.js` 与 `utils/config.js` 两处保持一致，`tests/cloud.test.js` 会校验不一致。
 
 **需要你在上线前核对的事项**
 
-- **虚拟商品必须走「小程序虚拟支付」**：按微信官方文档，小程序内销售虚拟商品（解锁功能、会员、付费功能等）的购买与支付均需接入虚拟支付，见下文「iOS 合规接入」。当前的云支付（JSAPI）链路在 iOS 与安卓上是否合规，请以官方最新规则和审核结果为准，正式收费前务必确认。
-- **云开发接口字段**：`unifiedOrder` 的回调事件字段、`queryOrder` 的入参和返回字段以云开发官方文档为准，代码里做了保守处理（异常一律视为未支付），但没有在真实商户环境验证过，请用 1 分钱订单完整走一遍。
-- **退款**：目前没有退款接口，帮助页也没有写退款政策。退款后需要人工在 `users` 里回收对应额度（或自行增加调用 `cloudPay.refund` 的云函数）；如有退款规则，请补充到帮助页。
+- **接口字段以真实环境为准**：代码按官方文档实现了 `wx.requestVirtualPayment` 的签名（`paySig` = HMAC-SHA256(AppKey, `requestVirtualPayment&` + signData)，`signature` = HMAC-SHA256(session_key, signData)）、`/xpay/query_order` 的调用（`pay_sig` 签名 + `access_token`，用 `stable_token` 获取并缓存）与推送字段，单元测试用替身覆盖了各分支，但没有在真实商户环境里验证过。请用最低价订单完整走一遍，并留意云函数日志。
+- **金额校验较严格**：入账要求 `query_order` 返回的 `order_fee` 等于目录价格。如果 iOS 的实际价格与目录不一致（例如 Apple 价格档位调整），订单不会入账并在日志里记录 `amount_mismatch`，需要调整道具价格与目录。
+- **access_token 与其他云函数共用 AppSecret**：`stable_token` 与 `getAccessToken` 互相隔离，不会挤掉别处获取的 token；AppSecret 只放在云函数环境变量里。
+- **投诉与 iOS 退款问询**：当前只处理发货与退款推送；`xpay_complaint_notify`（用户投诉）与 `xpay_subscribe_ios_refund_query_notify`（订阅类退款问询，本产品没有订阅）会被确认但不处理，需要的话在 `handler.js` 的 `onXpayNotify` 里扩展。
 - 出图仍在手机上完成，服务端只能约束“出无水印图之前必须先扣额度”，无法阻止用户用其他手段绕过客户端；这对本产品的定位通常足够。
-
-### iOS 合规接入（小程序虚拟支付）
-
-依据微信开放文档「虚拟支付」（<https://developers.weixin.qq.com/miniprogram/dev/platform-capabilities/business-capabilities/virtual-payment.html>，接入前请再核对最新版本）：
-
-- 小程序内的虚拟商品（虚拟货币、解锁功能、订阅内容、付费功能、打赏等）的购买和支付，都需要接入**小程序虚拟支付**，统一调用 `wx.requestVirtualPayment`；平台按设备路由：Android / 鸿蒙 / Windows 走微信支付，**iOS 走 Apple 支付（IAP）**。不得引导用户到 H5、公众号、外部网站或 App 支付。
-- **开通条件**：已认证小程序，主体为企业 / 事业单位 / 个体工商户（个人主体有单独的「虚拟支付：个人」文档，要求服务类目含「工具」并完成认证与备案）。在小程序后台左侧「虚拟支付」开通并签约，会得到新的商户号与 `offerId` / `appKey`。iOS 还需在「虚拟支付 → 基础配置」配置小程序简称并开通 Apple IAP。
-- **iOS 用户条件**：iOS 15 及以上、微信 8.0.68 及以上，最低支付金额 1 元（本产品最低 ¥1.29，满足），仅支持中国大陆 App Store 账户；Apple 支付没有沙箱，只能用现网验证。
-- **商品配置**：在虚拟支付后台的「道具管理」里配置道具（月度、年度、买断、单张各一个，价格与 `catalog.js` 一致），Android、iOS 互通；`wx.requestVirtualPayment` 使用 `mode: 'short_series_goods'` 道具直购，`signData`、`paySig`、`signature` 由云函数用 `appKey` 签名后返回，小程序端不保存密钥。
-- **入账**：以平台的「发货推送」为主、`query_order` 查单为补充（与现有 `syncOrder` 思路一致），发货逻辑按订单号幂等，仍然发放本项目的权益（`users` / `orders`）。iOS 订单由 Apple 结算并扣除佣金，退款由用户在 App Store 发起，开发者不能主动退款。
-- **对本项目的改动范围**：新增云函数 action（下单签名、发货推送处理、查单）替换 `createOrder` 里的 `cloudPay.unifiedOrder`；`utils/payment.js` 的 `payCloud` 改调 `wx.requestVirtualPayment`；iOS 的金额需满足 Apple 价格档位规则时，按后台配置的道具价格调整 `catalog.js`。完成并真机验证后，把 `payment.iosPurchase` 改为 `true` 即可在 iOS 显示价格与购买入口。
 
 ## 转发与朋友圈
 
@@ -202,13 +208,13 @@
 
 ## 上线清单
 
-代码侧已就绪的配置：`payment.mode = 'cloud'`、`membership.inviteCodes` 为空、`payment.iosPurchase = false`、`brand.qrcode` 已指向小程序码、提交到仓库的 `utils/config.local.js` 不含 token。上线前还需要在后台完成：
+代码侧已就绪的配置：`payment.mode = 'cloud'`、`membership.inviteCodes` 为空、`payment.iosPurchase = true`（配合虚拟支付；虚拟支付未开通前请改为 `false`）、`brand.qrcode` 已指向小程序码、提交到仓库的 `utils/config.local.js` 不含 token。上线前还需要在后台完成：
 
 1. **服务器域名**：小程序后台「开发管理 → 开发设置 → 服务器域名」，`request` 与 `downloadFile` 合法域名加入 `https://api.mapbox.com`（必须带 `https://`，不带端口与路径；每月修改次数有限）。
 2. **用户隐私保护指引**（「设置 → 服务内容声明 → 用户隐私保护指引」）：声明「选中的照片或视频信息」（`wx.chooseMedia`）、「相册（仅写入）权限」（`wx.saveImageToPhotosAlbum`）、「位置信息」（`wx.chooseLocation`），用途与帮助页的隐私说明保持一致，并写明照片的经纬度与搜索关键词会发送给 Mapbox。未声明的接口会调用失败（errno 112）；用户拒绝时（errno 104），页面会提示需要同意隐私保护指引。
 3. **接口权限**：如后台提示，在「开发管理 → 接口设置」中开通 `wx.chooseLocation`（地图选点）。
 4. **客服**：在后台「客服」中绑定客服人员，帮助页的「联系客服」才有人接待；「意见反馈」的内容在后台「用户反馈」中查看。
-5. **云开发与支付**：按上文「部署步骤」部署云函数、配置环境变量与数据库权限，并用 1 分钱订单在体验版完整走一遍。
+5. **云开发与虚拟支付**：按上文「开通与部署步骤」开通虚拟支付（含 iOS 的小程序简称与 Apple IAP）、创建并发布道具、部署云函数、配置环境变量、数据库权限与消息推送，并用最低价订单在 iOS 与 Android 体验版各完整走一遍（含退款）。
 6. **服务类目**与实际功能（图片制作、虚拟商品售卖）一致；如有用户协议或退款规则，补充到帮助页。
 7. **真机回归**（iOS 与安卓各一台，体验版）：选图（含无定位、经聊天转发的照片）、首次保存时的隐私弹窗与相册授权、拒绝后到设置重新开启、批量保存、转发卡片与朋友圈单页、免费额度用完后的购买 / 邀请码、弱网与断网。
 
@@ -219,7 +225,8 @@ node --test tests/*.test.js
 ```
 
 - `utils.test.js`：EXIF、静态图 URL、地名规范化、会员规则等工具函数。
-- `cloud.test.js`：用内存版的云开发 SDK（`helpers/fake-cloud.js`）跑完整的下单 → 回调 → 入账 → 扣额度 → 邀请码流程，并让小程序端 `payment.js` 直接调用云函数；校验两处价格配置一致。
+- `cloud.test.js`：用内存版的云开发 SDK（`helpers/fake-cloud.js`）跑完整的下单 → 回调 → 入账 → 扣额度 → 邀请码流程（云支付通道，`PAY_CHANNEL=jsapi`），并让小程序端 `payment.js` 直接调用云函数；校验两处价格配置一致，伪造的支付通知不会入账。
+- `xpay.test.js`：虚拟支付通道。用 `helpers/fake-xpay.js`（`code2Session`、`stable_token`、`query_order` 的替身，签名算法独立实现）校验下单签名、道具 ID 与价格、openid 核对、发货推送先查单再入账且幂等、伪造 / 金额不符 / 沙箱推送不入账、`access_token` 缓存与过期重试、退款收回权益，以及小程序端的 iOS 微信版本检查、取消、失败与“确认中”。
 - `poster.test.js`：用严格的假 Canvas 跑遍所有模板与极端输入（长名、空名、中文名、无日期、无位置、离线地图、透明度 0、水印与底栏），检查 NaN 坐标、非法字体串、save / restore 成对、残留 undefined 文本，以及署名规则、护照机读区校验位与地图集比例尺。
 - `page.test.js`：在 Node 中运行真实的首页脚本（`helpers/page-env.js` 提供记录调用的 `wx` 替身），覆盖免费版（拍立得每月 10 张、其余模板带水印）、本地与云端购买（含买断）、批量权限、邀请码、断网扣额度、iOS、朋友圈单页、转发卡片、隐私报错、进度与屏幕常亮、弹层遮挡、批量编辑。`showModal` 替身与真机一致：按钮文字超过 4 个字符直接失败。
 - `about.test.js`：帮助页内容随平台、支付模式与版本类型的变化。

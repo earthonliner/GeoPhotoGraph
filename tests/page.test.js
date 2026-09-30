@@ -8,6 +8,7 @@ const membership = require('../utils/membership');
 const platform = require('../utils/platform');
 const { createHandler } = require('../cloudfunctions/api/handler');
 const { createFakeCloud } = require('./helpers/fake-cloud');
+const { createFakeXpay, VIRTUAL_ENV } = require('./helpers/fake-xpay');
 const { createWx, createPage, createCanvasNode, tap, sleep, violations } = require('./helpers/page-env');
 
 const EXIF = {
@@ -39,12 +40,16 @@ const monthMember = (used = 0) => ({ bought: true, packs: [{ planId: 'month', qu
 const BATCH_NOTICE = '批量导入与批量下载只对月度、年度、买断会员和邀请码开放，单张解锁不含批量。';
 
 // cloud 模式：页面 + payment.js + 云函数（内存数据库）。offlineAfter 次扣额度之后模拟断网
-function cloudSetup(overrides) {
+// virtual 为 true 时走虚拟支付（wx.requestVirtualPayment），否则走云支付
+function cloudSetup(overrides, virtual) {
   config.payment.mode = 'cloud';
   config.payment.confirm = { tries: 2, delayMs: 0 };
   const fake = createFakeCloud();
-  const main = createHandler({ cloud: fake.cloud, env: { SUB_MCH_ID: '1', INVITE_CODES: 'geo0930' } });
-  const env = { fake, main, actions: [], pay: 'notify', offlineAfter: Infinity };
+  const xp = createFakeXpay();
+  const main = virtual
+    ? createHandler({ cloud: fake.cloud, env: VIRTUAL_ENV, http: xp.http })
+    : createHandler({ cloud: fake.cloud, env: { PAY_CHANNEL: 'jsapi', SUB_MCH_ID: '1', INVITE_CODES: 'geo0930' } });
+  const env = { fake, xp, main, actions: [], pay: 'notify', offlineAfter: Infinity };
   let consumed = 0;
   env.wx = createWx(
     Object.assign(
@@ -58,10 +63,20 @@ function cloudSetup(overrides) {
             return { result: await main(data) };
           }
         },
+        login: (o) => o.success({ code: 'code-a' }),
+        getAppBaseInfo: () => ({ version: '8.0.68' }),
+        requestVirtualPayment(o) {
+          if (env.pay === 'cancel') return o.fail({ errMsg: 'requestVirtualPayment:fail cancel' });
+          const d = JSON.parse(o.signData);
+          if (env.pay !== 'notify') return o.success({});
+          xp.pay(d.outTradeNo, d.goodsPrice);
+          return main({ Event: 'xpay_goods_deliver_notify', OpenId: 'openid-a', OutTradeNo: d.outTradeNo, Env: 0 }).then(() => o.success({}));
+        },
         requestPayment(o) {
           if (env.pay === 'cancel') return o.fail({ errMsg: 'requestPayment:fail cancel' });
           const id = o.package.replace('prepay_id=', '');
           const fee = fake.dump().orders[id].totalFee;
+          if (env.pay === 'notify') fake.ledger[id] = fee;
           const notified =
             env.pay === 'notify'
               ? main({ returnCode: 'SUCCESS', resultCode: 'SUCCESS', outTradeNo: id, totalFee: fee, transactionId: `wx-${id}` })
@@ -423,6 +438,7 @@ test('cloud：导出前由服务端扣额度，本地篡改会被纠正，支付
   assert.ok(env.wx.calls.toast.includes('支付结果确认中，稍后自动到账'));
   assert.strictEqual(page.member.singles, before);
   const pending = Object.values(env.fake.dump().orders).find((o) => o.status === 'pending' && o.kind === 'single');
+  env.fake.ledger[pending._id] = 129;
   await env.main({ returnCode: 'SUCCESS', resultCode: 'SUCCESS', outTradeNo: pending._id, totalFee: 129, transactionId: 'wx-late' });
   await page.onShow();
   assert.strictEqual(page.member.singles, before + 1);
@@ -432,6 +448,52 @@ test('cloud：导出前由服务端扣额度，本地篡改会被纠正，支付
   page.onInviteInput({ detail: { value: ' GEO0930' } });
   await page.onRedeemInvite();
   assert.strictEqual(env.fake.dump().users['openid-a'].invite, true);
+});
+
+test('iOS：虚拟支付通道下可以购买，Apple 支付完成后由服务端确认入账', async () => {
+  const env = cloudSetup({ getDeviceInfo: () => ({ platform: 'ios' }) }, true);
+  env.wx.files = ['a.jpg', 'k.jpg'];
+  const page = createPage(env.wx);
+  page.onLoad();
+  await page.onShow();
+  assert.strictEqual(page.data.canPurchase, true);
+  assert.deepStrictEqual(page.data.plans.map((x) => x.kind), ['plan', 'plan', 'lifetime']);
+
+  env.pay = 'cancel';
+  await page.onBuy(tap({ kind: 'plan', id: 'month' }));
+  assert.strictEqual(page.member.packs.length, 0);
+  assert.ok(!env.wx.calls.toast.includes('支付失败，请重试'));
+
+  env.pay = 'notify';
+  await page.onBuy(tap({ kind: 'plan', id: 'month' }));
+  await sleep(450);
+  assert.strictEqual(page.member.packs[0].quota, 120);
+  assert.strictEqual(page.data.memberChip, '会员 · 120 张');
+  const paid = Object.values(env.fake.dump().orders).filter((o) => o.status === 'paid');
+  assert.deepStrictEqual(paid.map((o) => [o.channel, o.productId]), [['virtual', 'geopics_month']]);
+
+  // 苹果 / 微信侧确认稍慢：提示确认中，之后回到小程序由服务端查单补发
+  env.pay = 'none';
+  await page.onBuy(tap({ kind: 'lifetime', id: 'lifetime' }));
+  assert.ok(env.wx.calls.toast.includes('支付结果确认中，稍后自动到账'));
+  assert.ok(!page.member.lifetime);
+  clearTimeout(page._syncTimer);
+  const pending = Object.values(env.fake.dump().orders).find((o) => o.status === 'pending' && o.kind === 'lifetime');
+  env.xp.pay(pending._id, 29900);
+  await page.onShow();
+  assert.strictEqual(page.member.lifetime.planId, 'lifetime');
+  clearTimeout(page._syncTimer);
+});
+
+test('iOS：旧版微信会提示升级，不发起支付', async () => {
+  const env = cloudSetup({ getDeviceInfo: () => ({ platform: 'ios' }), getAppBaseInfo: () => ({ version: '8.0.50' }) }, true);
+  env.wx.files = ['a.jpg'];
+  const page = createPage(env.wx);
+  page.onLoad();
+  await page.onShow();
+  await page.onBuy(tap({ kind: 'plan', id: 'month' }));
+  assert.ok(env.wx.calls.modal.some((m) => m.title === '需要更新微信'));
+  assert.strictEqual(page.member.packs.length, 0);
 });
 
 test('cloud：买断由服务端入账，重复购买被拒绝并同步已有权益', async () => {
@@ -492,7 +554,8 @@ test('cloud：扣额度时网络异常立即停止批量，并提示已保存张
   assert.deepStrictEqual(env.wx.calls.keepScreenOn, [true, false]);
 });
 
-test('iOS：不展示价格与购买入口，文案不含购买引导，邀请码照常可用', async () => {
+test('iOS：关闭购买入口（iosPurchase=false）时不展示价格，文案不含购买引导，邀请码照常可用', async () => {
+  config.payment.iosPurchase = false;
   config.membership.inviteCodes = ['geo0930'];
   const wx = createWx({ getDeviceInfo: () => ({ platform: 'ios' }) });
   wx.store['geopics.membership'] = Object.assign(freeOut(), { freeUsed: 1 });
@@ -562,11 +625,14 @@ test('iOS：不展示价格与购买入口，文案不含购买引导，邀请�
   assert.strictEqual(page.data.memberLabel, '额度已用完');
 });
 
-test('平台判断：仅 iOS 默认关闭购买，可通过配置打开；接口异常时按普通环境处理', () => {
+test('平台判断：iOS 购买入口由 iosPurchase 控制；接口异常时按普通环境处理', () => {
   const run = (wx) => {
     global.wx = wx;
     return platform.canPurchase();
   };
+  assert.strictEqual(config.payment.iosPurchase, true, 'iOS purchases are on by default with virtual payment');
+  assert.strictEqual(run(createWx({ getDeviceInfo: () => ({ platform: 'ios' }) })), true);
+  config.payment.iosPurchase = false;
   assert.strictEqual(run(createWx({ getDeviceInfo: () => ({ platform: 'ios' }) })), false);
   for (const name of ['android', 'devtools', 'windows', 'mac', 'ohos']) {
     assert.strictEqual(run(createWx({ getDeviceInfo: () => ({ platform: name }) })), true, name);
