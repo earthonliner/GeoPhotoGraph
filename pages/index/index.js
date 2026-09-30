@@ -18,8 +18,13 @@ const appConfig = require('../../utils/config');
 const POSTER_W = 400;
 const POSTER_H = (POSTER_W * 4) / 3;
 const EXPORT_SCALE = 3;
+// 底端品牌栏（可选）拼接在海报下方，整张图高度 = POSTER_H + FOOTER_H
+const FOOTER_H = 64;
 const MAX_CROP_ZOOM = 4;
 const MAX_BATCH = 9;
+const FOOTER_KEY = 'geopics.footer';
+
+const posterHeight = (footer) => POSTER_H + (footer ? FOOTER_H : 0);
 
 // 各模板中照片的取景区域（逻辑单位）；胶片 / 明信片的照片框固定，其余为整版或下半版
 const FILM_PHOTO = { left: 68, top: 50, w: 264, h: 368 };
@@ -1262,31 +1267,107 @@ function paintCoord(ctx, scale, assets, info, tpl, style) {
 }
 
 // 免费版水印：整幅斜向平铺，深浅双层描边，任何底色上都清晰可见
-function drawWatermark(ctx, scale) {
+function drawWatermark(ctx) {
   const W = POSTER_W;
   const H = POSTER_H;
   const text = 'GEOPICS · PREVIEW';
   ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, W, H);
+  ctx.clip();
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'center';
-  setFont(ctx, 15, 800, SANS);
+  setFont(ctx, 13, 700, SANS);
   ctx.translate(W / 2, H / 2);
   ctx.rotate(-Math.PI / 6);
   ctx.lineJoin = 'round';
-  ctx.lineWidth = 2.4;
-  const stepX = 190;
-  const stepY = 86;
+  ctx.lineWidth = 1.6;
+  const stepX = 320;
+  const stepY = 170;
   const span = Math.ceil(Math.hypot(W, H) / 2 / stepY) + 1;
   for (let row = -span; row <= span; row += 1) {
     const offset = (row % 2) * (stepX / 2);
-    for (let col = -3; col <= 3; col += 1) {
+    for (let col = -2; col <= 2; col += 1) {
       const x = col * stepX + offset;
       const y = row * stepY;
-      ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+      ctx.strokeStyle = 'rgba(0,0,0,0.12)';
       ctx.strokeText(text, x, y);
-      ctx.fillStyle = 'rgba(255,255,255,0.62)';
+      ctx.fillStyle = 'rgba(255,255,255,0.34)';
       ctx.fillText(text, x, y);
     }
+  }
+  ctx.restore();
+}
+
+// GEOPICS 标志：地球经纬线 + 定位点
+function drawLogoMark(ctx, cx, cy, r, color) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, r * 0.42, r, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - r, cy);
+  ctx.lineTo(cx + r, cy);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx + r * 0.62, cy - r * 0.62, r * 0.27, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// 底端品牌栏：左侧标志与字标，右侧小程序码（没有码图时用文字提示）
+function drawBrandFooter(ctx, y0, style, qr) {
+  const W = POSTER_W;
+  const dark = style.theme.dark;
+  const bg = dark ? '#0f1012' : '#fbfaf7';
+  const ink = dark ? '#f2f0ea' : '#161616';
+  const sub = dark ? 'rgba(242,240,234,0.6)' : 'rgba(22,22,22,0.55)';
+
+  ctx.save();
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, y0, W, FOOTER_H);
+  ctx.strokeStyle = dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)';
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(0, y0 + 0.3);
+  ctx.lineTo(W, y0 + 0.3);
+  ctx.stroke();
+
+  const cy = y0 + FOOTER_H / 2;
+  drawLogoMark(ctx, 34, cy, 11, ink);
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = ink;
+  setFont(ctx, 14, 800, SANS);
+  drawSpacedText(ctx, 'GEOPICS', 54, cy + 1, 4, 'left');
+  ctx.fillStyle = sub;
+  setFont(ctx, 6.5, 500, SANS);
+  drawSpacedText(ctx, appConfig.brand.tagline, 54, cy + 14, 2.4, 'left');
+
+  const qs = 46;
+  const qx = W - 22 - qs;
+  const qy = y0 + (FOOTER_H - qs) / 2;
+  if (qr) {
+    ctx.fillStyle = '#ffffff';
+    roundedRectPath(ctx, qx, qy, qs, qs, 4);
+    ctx.fill();
+    ctx.strokeStyle = dark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.1)';
+    roundedRectPath(ctx, qx, qy, qs, qs, 4);
+    ctx.stroke();
+    ctx.drawImage(qr, qx + 3, qy + 3, qs - 6, qs - 6);
+  } else {
+    ctx.fillStyle = sub;
+    setFont(ctx, 8, 500, SANS);
+    drawSpacedText(ctx, '微信搜索小程序', W - 22, cy - 3, 1.2, 'right');
+    ctx.fillStyle = ink;
+    setFont(ctx, 12, 800, SANS);
+    drawSpacedText(ctx, appConfig.brand.searchName, W - 22, cy + 14, 1.6, 'right');
   }
   ctx.restore();
 }
@@ -1342,13 +1423,15 @@ function paintPoster(canvas, tplId, assets, info, style) {
 
   if (!assets) {
     paintEmpty(ctx);
+    if (style && style.footer) drawBrandFooter(ctx, POSTER_H, style, null);
     return;
   }
   const tpl = TEMPLATES.find((t) => t.id === tplId) || TEMPLATES[0];
   textAlpha = style.textAlpha;
   PAINTERS[tpl.id](ctx, scale, assets, info, tpl, style);
   textAlpha = 1;
-  if (style.watermark) drawWatermark(ctx, scale);
+  if (style.watermark) drawWatermark(ctx);
+  if (style.footer) drawBrandFooter(ctx, POSTER_H, style, assets.qr || null);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1362,6 +1445,7 @@ function pickRandomTemplates(count, categoryId) {
 
 Page({
   data: {
+    footerOn: true,
     isMember: false,
     memberLabel: '',
     currentLocked: true,
@@ -1439,11 +1523,17 @@ Page({
 
     const win = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync();
     const cssW = Math.floor(Math.min(win.windowWidth - 48, 440));
-    const cssH = Math.round((cssW * 4) / 3);
+    let footerOn = true;
+    try {
+      footerOn = wx.getStorageSync(FOOTER_KEY) !== false;
+    } catch (e) {
+      footerOn = true;
+    }
+    const cssH = Math.round((cssW * posterHeight(footerOn)) / POSTER_W);
     this.cssSize = { w: cssW, h: cssH };
     this.dpr = Math.min(win.pixelRatio || 2, 3);
     this.setData(
-      Object.assign({ canvasStyle: `width:${cssW}px;height:${cssH}px;` }, this.pickerView(), this.memberView(), this.listView())
+      Object.assign({ footerOn, canvasStyle: `width:${cssW}px;height:${cssH}px;` }, this.pickerView(), this.memberView(), this.listView())
     );
   },
 
@@ -1462,6 +1552,32 @@ Page({
           if (res && res[0] && res[0].node) resolve(res[0].node);
           else reject(new Error(`canvas ${selector} not found`));
         });
+    });
+  },
+
+  // 底端品牌栏开关会改变海报高度：同步调整预览画布的尺寸
+  applyPreviewSize() {
+    const { w } = this.cssSize;
+    const h = Math.round((w * posterHeight(this.data.footerOn)) / POSTER_W);
+    this.cssSize = { w, h };
+    if (this.preview) {
+      this.preview.width = Math.round(w * this.dpr);
+      this.preview.height = Math.round(h * this.dpr);
+    }
+    this.setData({ canvasStyle: `width:${w}px;height:${h}px;` });
+  },
+
+  onToggleFooter(e) {
+    const on = !!e.detail.value;
+    if (on === this.data.footerOn) return;
+    try {
+      wx.setStorageSync(FOOTER_KEY, on);
+    } catch (err) {
+      /* 偏好保存失败不影响使用 */
+    }
+    this.setData({ footerOn: on }, () => {
+      this.applyPreviewSize();
+      this.render();
     });
   },
 
@@ -2393,7 +2509,15 @@ Page({
         map = null;
       }
     }
-    return { photo, map };
+    let qr = null;
+    if (style.footer && appConfig.brand.qrcode) {
+      try {
+        qr = await cachedImage(canvas, cache, appConfig.brand.qrcode);
+      } catch (e) {
+        qr = null;
+      }
+    }
+    return { photo, map, qr };
   },
 
   // 配色与不透明度（0~1）为全局设置；取景按条目各自保存
@@ -2405,7 +2529,8 @@ Page({
       photoAlpha: d.photoOpacity / 100,
       textAlpha: d.textOpacity / 100,
       crop: item.crops[item.templateId] || DEFAULT_CROP,
-      watermark: !this.isEntitled(item)
+      watermark: !this.isEntitled(item),
+      footer: this.data.footerOn
     };
   },
 
@@ -2460,7 +2585,7 @@ Page({
     // 页面外的隐藏 canvas 作为离屏画布：物理尺寸 1200 x 1600（3 倍）
     const canvas = await this.queryCanvas('#exportCanvas');
     canvas.width = POSTER_W * EXPORT_SCALE;
-    canvas.height = Math.round(POSTER_H * EXPORT_SCALE);
+    canvas.height = Math.round(posterHeight(this.data.footerOn) * EXPORT_SCALE);
 
     const tpl = TEMPLATES.find((t) => t.id === item.templateId);
     // 离屏画布不复用预览缓存，使用独立的 Image 对象

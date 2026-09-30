@@ -828,3 +828,24 @@
   font-size: 22rpx;
   color: #6f6e6a;
 }
+
+/* brand footer */
+.footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.footer-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding-right: 24rpx;
+}
+
+.footer-desc {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  line-height: 1.5;
+  color: #8a8a86;
+}
