@@ -6,10 +6,12 @@ const {
   FOOTER_H,
   SANS,
   SERIF,
+  TAGLINE,
   setFont,
   measureSpaced,
   drawSpacedText,
-  roundedRectPath
+  roundedRectPath,
+  drawMapRegion
 } = require('./core.js');
 
 // 免费版水印：整幅斜向平铺，深浅双层描边，任何底色上都清晰可见
@@ -141,21 +143,101 @@ function drawBrandFooter(ctx, y0, style, qr) {
   ctx.restore();
 }
 
-function paintEmpty(ctx) {
+const EMPTY_THEME = { tint: '#F3F1EC', dark: false, ink: '#141414' };
+const EMPTY_PIN = { x: 0.86, y: 0.5 };
+
+// 还没选照片时的示例海报：离线城市底图 + 拍立得相框占位，点按预览即可选择照片
+function paintEmpty(ctx, scale) {
   const W = POSTER_W;
   const H = POSTER_H;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = 'rgba(60,60,67,0.12)';
-  ctx.lineWidth = 0.6;
-  ctx.strokeRect(20, 20, W - 40, H - 40);
-  ctx.fillStyle = '#1c1c1e';
+  const ink = EMPTY_THEME.ink;
+  drawMapRegion(ctx, null, 0, 0, W, H, { map: { pin: EMPTY_PIN } }, { seed: 20240616 }, { theme: EMPTY_THEME, mapAlpha: 0.8 });
+
   ctx.textBaseline = 'alphabetic';
-  setFont(ctx, 30, 800, SANS);
-  drawSpacedText(ctx, 'GEOPICS', W / 2, H / 2 - 6, 5, 'center');
-  ctx.fillStyle = '#8e8e93';
-  setFont(ctx, 9, 400, SERIF, 'italic');
-  drawSpacedText(ctx, 'SELECT A PHOTO TO BEGIN', W / 2, H / 2 + 18, 2.4, 'center');
+  ctx.fillStyle = ink;
+  setFont(ctx, 46, 800, SANS);
+  drawSpacedText(ctx, 'YOUR PLACE', 24, 62, 2, 'left');
+  ctx.fillStyle = 'rgba(20,20,20,0.6)';
+  setFont(ctx, 8.5, 500, SANS);
+  drawSpacedText(ctx, 'GPS FROM YOUR PHOTO', 24, 82, 1.2, 'left');
+  drawSpacedText(ctx, 'DATE TAKEN', W - 24, 82, 1.2, 'right');
+
+  const fw = 276;
+  const fh = 316;
+  const fx = (W - fw) / 2;
+  const fy = 112;
+  const pad = 12;
+  const pw = fw - pad * 2;
+  const ph = fh - pad - 44;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.22)';
+  ctx.shadowBlur = 22 * scale;
+  ctx.shadowOffsetY = 8 * scale;
+  ctx.fillStyle = '#fbfaf7';
+  ctx.fillRect(fx, fy, fw, fh);
+  ctx.restore();
+
+  // 照片占位：浅色天空 + 线描山峦与太阳
+  const px = fx + pad;
+  const py = fy + pad;
+  const sky = ctx.createLinearGradient(0, py, 0, py + ph);
+  sky.addColorStop(0, '#e6ebee');
+  sky.addColorStop(1, '#f3efe8');
+  ctx.fillStyle = sky;
+  ctx.fillRect(px, py, pw, ph);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(px, py, pw, ph);
+  ctx.clip();
+  ctx.strokeStyle = 'rgba(60,60,67,0.2)';
+  ctx.lineWidth = 1.2;
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.arc(px + pw * 0.72, py + ph * 0.3, 16, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(px, py + ph * 0.8);
+  ctx.lineTo(px + pw * 0.22, py + ph * 0.52);
+  ctx.lineTo(px + pw * 0.36, py + ph * 0.66);
+  ctx.lineTo(px + pw * 0.56, py + ph * 0.42);
+  ctx.lineTo(px + pw * 0.8, py + ph * 0.7);
+  ctx.lineTo(px + pw, py + ph * 0.58);
+  ctx.stroke();
+  ctx.restore();
+
+  // 中央“添加”按钮
+  const cx = px + pw / 2;
+  const cy = py + ph / 2 + 6;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.16)';
+  ctx.shadowBlur = 10 * scale;
+  ctx.shadowOffsetY = 3 * scale;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 20, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = '#1c1c1e';
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - 7, cy);
+  ctx.lineTo(cx + 7, cy);
+  ctx.moveTo(cx, cy - 7);
+  ctx.lineTo(cx, cy + 7);
+  ctx.stroke();
+
+  const stripY = py + ph + 27;
+  ctx.fillStyle = '#2a2a2a';
+  setFont(ctx, 10, 400, SERIF, 'italic');
+  drawSpacedText(ctx, 'Select a photo to begin', px, stripY, 0.4, 'left');
+  ctx.fillStyle = '#777777';
+  setFont(ctx, 8, 700, SANS);
+  drawSpacedText(ctx, 'GEOPICS', fx + fw - pad, stripY, 1.6, 'right');
+
+  ctx.fillStyle = 'rgba(20,20,20,0.8)';
+  setFont(ctx, 8, 400, SERIF);
+  drawSpacedText(ctx, TAGLINE, W / 2, H - 20, 2.4, 'center');
 }
 
 module.exports = { drawWatermark, drawLogoMark, drawBrandFooter, paintEmpty };

@@ -109,67 +109,157 @@ function fitInside(img, maxW, maxH) {
   return { w: img.width * r, h: img.height * r };
 }
 
-// 无 token / 下载失败时的本地极简底图（按坐标做伪随机，同一位置结果稳定）
-function drawFallbackMap(ctx, x, y, w, h, seed, pin, dark) {
-  const rand = mulberry32(seed);
-  ctx.fillStyle = dark ? '#1c1d1f' : '#ecebe7';
-  ctx.fillRect(x, y, w, h);
-
-  ctx.strokeStyle = dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)';
-  ctx.lineWidth = 0.6;
-  const step = 24;
+// 与 Mapbox pin-s 相近的水滴形定位针，(x, y) 为针尖
+function drawPin(ctx, x, y, size, fill, core) {
+  const r = 4.4 * size;
+  const cy = y - 8.4 * size;
+  const phi = Math.acos(r / (y - cy));
+  ctx.fillStyle = fill;
   ctx.beginPath();
-  for (let gx = x; gx <= x + w; gx += step) {
-    ctx.moveTo(gx, y);
-    ctx.lineTo(gx, y + h);
-  }
-  for (let gy = y; gy <= y + h; gy += step) {
-    ctx.moveTo(x, gy);
-    ctx.lineTo(x + w, gy);
-  }
-  ctx.stroke();
-
-  ctx.fillStyle = dark ? '#2a2c31' : '#dedde9';
-  ctx.globalAlpha = 0.45;
-  ctx.beginPath();
-  ctx.ellipse(x + w * (0.15 + rand() * 0.3), y + h * (0.6 + rand() * 0.3), w * 0.28, h * 0.12, rand(), 0, Math.PI * 2);
+  ctx.arc(x, cy, r, Math.PI / 2 + phi, Math.PI * 2.5 - phi);
+  ctx.lineTo(x, y);
+  ctx.closePath();
   ctx.fill();
-  ctx.globalAlpha = 1;
+  ctx.fillStyle = core;
+  ctx.beginPath();
+  ctx.arc(x, cy, 1.7 * size, 0, Math.PI * 2);
+  ctx.fill();
+}
 
-  ctx.lineCap = 'round';
-  for (let i = 0; i < 16; i++) {
-    const major = i % 4 === 0;
-    ctx.strokeStyle = dark
-      ? major ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.14)'
-      : major ? '#ffffff' : 'rgba(255,255,255,0.75)';
-    ctx.lineWidth = major ? 3.2 : 1.4;
+const CITY_LIGHT = { land: '#ebeae6', park: '#dde3d6', water: '#d0d7dc', street: 'rgba(255,255,255,0.92)', casing: 'rgba(0,0,0,0.08)', road: '#ffffff' };
+const CITY_DARK = { land: '#1f2023', park: '#1d2420', water: '#111214', street: 'rgba(255,255,255,0.1)', casing: 'rgba(0,0,0,0.4)', road: 'rgba(255,255,255,0.24)' };
+
+// 一片旋转的街网：路段间距带随机抖动、偶尔缺一条，约每四条有一条较宽的次干道
+function strokeStreetGrid(ctx, rand, cx, cy, angle, spacing) {
+  const L = 800;
+  const minor = [];
+  const secondary = [];
+  let n = 0;
+  for (let off = -L / 2; off <= L / 2; off += spacing * (0.7 + rand() * 0.6)) {
+    if (rand() < 0.1) continue;
+    (n++ % 4 === 2 ? secondary : minor).push([-L / 2, off, L / 2, off]);
+  }
+  for (let off = -L / 2; off <= L / 2; off += spacing * (0.9 + rand() * 1.1)) {
+    if (rand() < 0.1) continue;
+    (n++ % 4 === 1 ? secondary : minor).push([off, -L / 2, off, L / 2]);
+  }
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  [[minor, 0.8], [secondary, 1.5]].forEach(([lines, width]) => {
+    ctx.lineWidth = width;
     ctx.beginPath();
-    const sx = x + rand() * w;
-    const sy = y + rand() * h;
-    ctx.moveTo(sx, sy);
-    ctx.bezierCurveTo(
-      x + rand() * w,
-      y + rand() * h,
-      x + rand() * w,
-      y + rand() * h,
-      x + rand() * w,
-      y + rand() * h
-    );
+    lines.forEach((l) => {
+      ctx.moveTo(l[0], l[1]);
+      ctx.lineTo(l[2], l[3]);
+    });
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
+// 在海报坐标系（含四周 60 的外延，供迷你地图取景）里生成城市示意：河流 / 海岸、两片不同走向的街区、公园、干道
+function drawCity(ctx, seed, pal) {
+  const rand = mulberry32(seed);
+  const W = POSTER_W;
+  const H = POSTER_H;
+  const M = 60;
+  ctx.fillStyle = pal.land;
+  ctx.fillRect(-M, -M, W + M * 2, H + M * 2);
+
+  // 河道中心线：左右贯穿，两岸各一片街区
+  const y0 = H * (0.3 + rand() * 0.4);
+  const y1 = H * (0.3 + rand() * 0.4);
+  const c1 = { x: W * 0.35, y: y0 + (rand() - 0.5) * H * 0.5 };
+  const c2 = { x: W * 0.65, y: y1 + (rand() - 0.5) * H * 0.5 };
+  const river = (p) => {
+    p.moveTo(-M, y0);
+    p.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, W + M, y1);
+  };
+  const coast = rand() < 0.3;
+  const angleA = (rand() - 0.5) * 0.9;
+  const angleB = angleA + (rand() < 0.5 ? 0.35 : -0.35) + (rand() - 0.5) * 0.3;
+
+  ctx.lineCap = 'butt';
+  ctx.strokeStyle = pal.street;
+  [[-M, angleA, 14 + rand() * 6], [H + M, angleB, 16 + rand() * 8]].forEach(([edge, angle, spacing]) => {
+    ctx.save();
+    ctx.beginPath();
+    river(ctx);
+    ctx.lineTo(W + M, edge);
+    ctx.lineTo(-M, edge);
+    ctx.closePath();
+    ctx.clip();
+    strokeStreetGrid(ctx, rand, W * rand(), H * rand(), angle, spacing);
+    ctx.restore();
+  });
+
+  ctx.fillStyle = pal.park;
+  for (let i = 0; i < 3; i++) {
+    const pw = 34 + rand() * 46;
+    const ph = 26 + rand() * 40;
+    ctx.save();
+    ctx.translate(W * (0.1 + rand() * 0.8), H * (0.08 + rand() * 0.84));
+    ctx.rotate(i % 2 ? angleA : angleB);
+    roundedRectPath(ctx, -pw / 2, -ph / 2, pw, ph, 5);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // 水面：河流，或以海岸线为界的一侧海面
+  ctx.fillStyle = pal.water;
+  ctx.strokeStyle = pal.water;
+  ctx.beginPath();
+  river(ctx);
+  if (coast) {
+    ctx.lineTo(W + M, H + M);
+    ctx.lineTo(-M, H + M);
+    ctx.closePath();
+    ctx.fill();
+  } else {
+    ctx.lineWidth = 16 + rand() * 12;
     ctx.stroke();
   }
 
-  if (pin) {
-    const px = x + w * pin.x;
-    const py = y + h * pin.y;
-    ctx.fillStyle = dark ? '#111111' : '#ffffff';
-    ctx.beginPath();
-    ctx.arc(px, py, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = dark ? '#ffffff' : '#111111';
-    ctx.beginPath();
-    ctx.arc(px, py, 3.6, 0, Math.PI * 2);
-    ctx.fill();
+  // 干道：一纵一横一斜，带浅色描边，跨河处即桥
+  ctx.lineCap = 'round';
+  const roads = [
+    [W * rand(), -M, W * rand(), H * 0.5, W * rand(), H * 0.5, W * rand(), H + M],
+    [-M, H * rand(), W * 0.5, H * rand(), W * 0.5, H * rand(), W + M, H * rand()],
+    [-M, -M + rand() * H * 0.4, W * 0.4, H * 0.4, W * 0.6, H * 0.6, W + M, H * (0.6 + rand() * 0.4)]
+  ];
+  [[pal.casing, 3.8], [pal.road, 2.4]].forEach(([color, width]) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    roads.forEach((r, i) => {
+      if (coast && i === 1) return;
+      ctx.beginPath();
+      ctx.moveTo(r[0], r[1]);
+      ctx.bezierCurveTo(r[2], r[3], r[4], r[5], r[6], r[7]);
+      ctx.stroke();
+    });
+  });
+}
+
+/**
+ * 无 token / 下载失败 / 照片没有位置时的离线底图：按种子生成的城市街区示意，同一位置结果稳定，
+ * 配色接近 Mapbox light / dark，叠加主题色后与真实地图观感一致。
+ * focus 为空时把整张示意图铺满区域；传入时（迷你地图）按 1:1 比例截取 focus 周围的一小块。
+ */
+function drawFallbackMap(ctx, x, y, w, h, seed, pin, dark, focus) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  if (focus) {
+    ctx.translate(x + w / 2 - POSTER_W * focus.x, y + h / 2 - POSTER_H * focus.y);
+  } else {
+    ctx.translate(x, y);
+    ctx.scale(w / POSTER_W, h / POSTER_H);
   }
+  drawCity(ctx, seed, dark ? CITY_DARK : CITY_LIGHT);
+  if (pin) drawPin(ctx, POSTER_W * pin.x, POSTER_H * pin.y, 1, dark ? '#f2f2f2' : '#141414', dark ? '#1f2023' : '#ebeae6');
+  ctx.restore();
 }
 
 // 用主题色给灰阶地图上色；设备不支持混合模式时退化为半透明色罩
@@ -254,7 +344,7 @@ function drawMapWindow(ctx, mapImg, x, y, w, h, tpl, info, style) {
     const sy = clamp(mapImg.height * tpl.map.pin.y - sh / 2, 0, mapImg.height - sh);
     ctx.drawImage(mapImg, sx, sy, sw, sh, x, y, w, h);
   } else {
-    drawFallbackMap(ctx, x, y, w, h, info.seed, { x: 0.5, y: 0.5 }, theme.dark);
+    drawFallbackMap(ctx, x, y, w, h, info.seed, tpl.map.pin, theme.dark, tpl.map.pin);
   }
   ctx.globalAlpha = 1;
   applyTint(ctx, theme, x, y, w, h);
@@ -374,6 +464,7 @@ module.exports = {
   coverRect,
   drawImageCover,
   fitInside,
+  drawPin,
   drawFallbackMap,
   applyTint,
   drawMapRegion,

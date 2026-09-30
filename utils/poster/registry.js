@@ -74,7 +74,7 @@ function paintPoster(canvas, tplId, assets, info, style) {
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
 
   if (!assets) {
-    paintEmpty(ctx);
+    paintEmpty(ctx, scale);
     if (style && style.footer) drawBrandFooter(ctx, POSTER_H, style, null);
     return;
   }
