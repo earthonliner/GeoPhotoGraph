@@ -25,6 +25,8 @@ const posterHeight = (footer) => POSTER_H + (footer ? FOOTER_H : 0);
 const exportSizeText = (footer) => `${POSTER_W * EXPORT_SCALE} × ${Math.round(posterHeight(footer) * EXPORT_SCALE)}`;
 // 界面强调色（iOS 系统蓝），用于系统弹窗按钮
 const TINT = '#007AFF';
+// 使用真实地图时海报上绘制的 Mapbox 标志（署名要求）
+const MAPBOX_LOGO = '/assets/mapbox-logo.png';
 
 const DEFAULT_CROP = { zoom: 1, x: 0, y: 0 };
 
@@ -1349,7 +1351,15 @@ Page({
         qr = null;
       }
     }
-    return { photo, map, qr };
+    let mapLogo = null;
+    if (map) {
+      try {
+        mapLogo = await cachedImage(canvas, cache, MAPBOX_LOGO);
+      } catch (e) {
+        mapLogo = null;
+      }
+    }
+    return { photo, map, qr, mapLogo };
   },
 
   // 配色与不透明度（0~1）为全局设置；取景按条目各自保存

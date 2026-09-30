@@ -298,6 +298,43 @@ function splitCoord(info) {
   return { lat: parts[0] || '', lon: parts[1] || '' };
 }
 
+// Mapbox 要求静态 / 印刷地图附带其标志与文字署名。静态图自带的角标会随各模板的裁切被遮挡或截断，
+// 因此请求时关闭，改由模板在固定位置绘制；署名不受文字不透明度影响，离线简约底图不需要署名
+const CREDIT_TEXT = '© Mapbox © OpenStreetMap';
+const LOGO_RATIO = 80.47 / 20.02;
+
+function creditColor(tone, style) {
+  const ink = style.theme.ink;
+  if (tone === 'photo') return style.photoAlpha >= 0.5 ? 'rgba(255,255,255,0.8)' : hexToRgba(ink, 0.62);
+  if (tone === 'paper') return 'rgba(43,38,34,0.6)';
+  if (tone === 'dark') return 'rgba(255,255,255,0.58)';
+  return hexToRgba(ink, 0.62);
+}
+
+/**
+ * @param logo  Mapbox 标志图片（可为 null，只绘制文字）
+ * @param spot  { x, y: 文字基线, align: left|center|right, tone: map|photo|paper|dark, rotate? }
+ */
+function drawMapCredit(ctx, logo, spot, style) {
+  const size = 5.2;
+  const logoH = 6.6;
+  const logoW = logo ? logoH * LOGO_RATIO : 0;
+  const gap = logo ? 3.5 : 0;
+  ctx.save();
+  ctx.translate(spot.x, spot.y);
+  if (spot.rotate) ctx.rotate(spot.rotate);
+  ctx.textBaseline = 'alphabetic';
+  setFont(ctx, size, 500, SANS);
+  const total = logoW + gap + measureSpaced(ctx, CREDIT_TEXT, 0.3);
+  let x = 0;
+  if (spot.align === 'right') x = -total;
+  else if (spot.align === 'center') x = -total / 2;
+  if (logo) ctx.drawImage(logo, x, -size * 0.36 - logoH / 2, logoW, logoH);
+  ctx.fillStyle = creditColor(spot.tone, style);
+  drawSpacedText(ctx, CREDIT_TEXT, x + logoW + gap, 0, 0.3, 'left');
+  ctx.restore();
+}
+
 function drawPerforatedStamp(ctx, x, y, w, h, holeColor) {
   ctx.fillStyle = '#fffdf6';
   ctx.fillRect(x, y, w, h);
@@ -346,6 +383,7 @@ module.exports = {
   photoText,
   drawFullBleedPhoto,
   splitCoord,
+  drawMapCredit,
   drawPerforatedStamp,
   setTextAlpha
 };
