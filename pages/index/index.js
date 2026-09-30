@@ -1,5 +1,6 @@
 const exifParser = require('../../utils/exif-parser');
 const mapService = require('../../utils/map-service');
+const placeName = require('../../utils/place-name');
 
 /* ------------------------------------------------------------------ */
 /* 常量与模板配置                                                       */
@@ -389,7 +390,14 @@ Page({
     coordText: '',
     dateText: '',
     place: '',
+    placeLang: 'en',
+    placeManual: false,
     hasLocation: false,
+    searchVisible: false,
+    searchKeyword: '',
+    searchResults: [],
+    searching: false,
+    searchEmpty: false,
     zoom: 12,
     canvasStyle: '',
     busy: false,
@@ -399,9 +407,21 @@ Page({
 
   onLoad() {
     // 非 data 状态：与渲染无关，避免多余的 setData
-    this.poster = { photoPath: '', lat: null, lon: null, place: '', coordText: '', dateText: '' };
+    this.poster = {
+      photoPath: '',
+      lat: null,
+      lon: null,
+      place: '',
+      fallbackName: '',
+      coordText: '',
+      dateText: ''
+    };
     this._renderId = 0;
     this._locId = 0;
+    this._searchId = 0;
+    this._geoCache = {};
+    this._searchTimer = null;
+    this._placeTimer = null;
     this._imgCache = new Map();
     this._mapCache = {};
     this._mapWarned = false;
@@ -478,6 +498,7 @@ Page({
       lat: null,
       lon: null,
       place: '',
+      fallbackName: '',
       coordText: '',
       dateText: ''
     };
@@ -491,7 +512,8 @@ Page({
       hasLocation: false,
       coordText: '',
       dateText: this.poster.dateText,
-      place: ''
+      place: '',
+      placeManual: false
     });
 
     if (exif.hasGps) {
@@ -520,6 +542,27 @@ Page({
       wx.showToast({ title: '请先选择照片', icon: 'none' });
       return;
     }
+    // wx.chooseLocation 使用腾讯地图，海外无法定位；配置了 Mapbox 时提供全球搜索
+    if (!mapService.hasToken()) {
+      await this.pickWithWechatMap();
+      return;
+    }
+    let tapIndex;
+    try {
+      ({ tapIndex } = await wxp('showActionSheet', {
+        itemList: ['搜索地点（全球）', '地图选点（微信地图，仅国内）']
+      }));
+    } catch (e) {
+      return;
+    }
+    if (tapIndex === 0) {
+      this.setData({ searchVisible: true, searchKeyword: '', searchResults: [], searching: false, searchEmpty: false });
+    } else {
+      await this.pickWithWechatMap();
+    }
+  },
+
+  async pickWithWechatMap() {
     let loc;
     try {
       loc = await wxp('chooseLocation', {});
@@ -534,6 +577,79 @@ Page({
     this.showBusy('生成海报…');
     await this.applyLocation(wgs.lat, wgs.lon, loc.name || '');
     this.hideBusy();
+  },
+
+  /* ---------------------------- 全球地点搜索 ---------------------------- */
+
+  noop() {},
+
+  onSearchClose() {
+    this._searchId += 1;
+    clearTimeout(this._searchTimer);
+    this.setData({ searchVisible: false, searching: false });
+  },
+
+  onSearchInput(e) {
+    const keyword = e.detail.value;
+    this.setData({ searchKeyword: keyword });
+    clearTimeout(this._searchTimer);
+    if (!keyword.trim()) {
+      this._searchId += 1;
+      this.setData({ searchResults: [], searching: false, searchEmpty: false });
+      return;
+    }
+    this._searchTimer = setTimeout(() => this.runSearch(keyword), 350);
+  },
+
+  onSearchConfirm(e) {
+    clearTimeout(this._searchTimer);
+    this.runSearch(e.detail.value);
+  },
+
+  async runSearch(keyword) {
+    if (!keyword.trim()) return;
+    const searchId = ++this._searchId;
+    this.setData({ searching: true, searchEmpty: false });
+    const results = await mapService.searchPlaces(keyword, this.data.placeLang);
+    if (searchId !== this._searchId) return;
+    this.setData({ searching: false, searchResults: results, searchEmpty: results.length === 0 });
+  },
+
+  async onSelectResult(e) {
+    const hit = this.data.searchResults[e.currentTarget.dataset.index];
+    if (!hit) return;
+    this.onSearchClose();
+    this.showBusy('生成海报…');
+    await this.applyLocation(hit.lat, hit.lon, hit.name);
+    this.hideBusy();
+  },
+
+  /* ---------------------------- 地名：手动修改 / 语言切换 ---------------------------- */
+
+  onPlaceInput(e) {
+    const value = e.detail.value;
+    this.poster.place = value;
+    this.setData({ place: value, placeManual: true });
+    clearTimeout(this._placeTimer);
+    this._placeTimer = setTimeout(() => this.render(), 200);
+  },
+
+  onPlaceReset() {
+    if (this.data.hasLocation) {
+      this.resolvePlace(++this._locId);
+    } else {
+      this.poster.place = 'UNKNOWN';
+      this.setData({ place: 'UNKNOWN', placeManual: false });
+      this.render();
+    }
+  },
+
+  onPlaceLangChange(e) {
+    const lang = e.currentTarget.dataset.lang;
+    if (lang === this.data.placeLang) return;
+    this.setData({ placeLang: lang }, () => {
+      if (this.data.hasLocation) this.resolvePlace(++this._locId);
+    });
   },
 
   onTapTemplate(e) {
@@ -557,16 +673,30 @@ Page({
     const coords = exifParser.formatCoordinates(lat, lon);
     this.poster.lat = lat;
     this.poster.lon = lon;
+    this.poster.fallbackName = fallbackName || '';
     this.poster.coordText = coords.text;
     this.poster.place = 'LOCATING…';
-    this.setData({ hasLocation: true, coordText: coords.text, place: this.poster.place });
+    this.setData({ hasLocation: true, coordText: coords.text, place: this.poster.place, placeManual: false });
+    await this.resolvePlace(locId);
+  },
 
-    const geo = await mapService.reverseGeocode(lat, lon);
+  // 按当前语言设置解析地名：服务商结果 -> 备用名（如选点名称）-> UNKNOWN。
+  // 英文模式下若拿到的是汉字，短名转拼音、长名转首字母缩写。
+  async resolvePlace(locId) {
+    const { lat, lon, fallbackName } = this.poster;
+    const lang = this.data.placeLang;
+    const key = `${lat.toFixed(4)},${lon.toFixed(4)},${lang}`;
+
+    let geo = this._geoCache[key];
+    if (geo === undefined) {
+      geo = await mapService.reverseGeocode(lat, lon, lang);
+      if (geo) this._geoCache[key] = geo;
+    }
     if (locId !== this._locId) return;
 
-    const place = (geo && geo.name) || String(fallbackName || '').toUpperCase() || 'UNKNOWN';
+    const place = placeName.normalizePlaceName((geo && geo.name) || fallbackName, lang) || 'UNKNOWN';
     this.poster.place = place;
-    this.setData({ place });
+    this.setData({ place, placeManual: false });
     await this.render();
   },
 

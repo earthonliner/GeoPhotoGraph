@@ -97,39 +97,74 @@ function downloadImage(url) {
 
 const PLACE_PRIORITY = ['place', 'locality', 'district', 'region', 'country'];
 
-/**
- * 经纬度 -> 大写英文地名，如 ZERMATT / HONG KONG / FRANKFURT
- * @returns {Promise<{name:string, country:string}|null>} 失败或无 token 时为 null
- */
-function reverseGeocode(lat, lon) {
-  if (!hasToken()) return Promise.resolve(null);
-  const { token, language } = config.mapbox;
-  const url =
-    `https://api.mapbox.com/geocoding/v5/mapbox.places/${lon.toFixed(6)},${lat.toFixed(6)}.json` +
-    `?types=${PLACE_PRIORITY.join(',')}&language=${language}&access_token=${token}`;
+// 'en' -> 英文；'zh' -> 简体中文。Mapbox 在目标语言缺失时会回退为当地语言。
+function mapboxLanguage(lang) {
+  return lang === 'zh' ? 'zh-Hans' : 'en';
+}
 
+function geocodingRequest(path, query) {
+  const params = Object.keys(query)
+    .map((k) => `${k}=${encodeURIComponent(query[k])}`)
+    .join('&');
+  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${path}.json?${params}&access_token=${config.mapbox.token}`;
   return new Promise((resolve) => {
     wx.request({
       url,
       timeout: config.request.timeout,
-      success: (res) => {
-        const features = (res.data && res.data.features) || [];
-        let picked = null;
-        for (const type of PLACE_PRIORITY) {
-          picked = features.find((f) => (f.place_type || []).indexOf(type) >= 0);
-          if (picked) break;
-        }
-        if (!picked) return resolve(null);
-        const ctx = picked.context || [];
-        const country = ctx.find((c) => /^country/.test(c.id || ''));
-        resolve({
-          name: String(picked.text_en || picked.text || '').toUpperCase(),
-          country: country ? String(country.text_en || country.text).toUpperCase() : ''
-        });
-      },
-      fail: () => resolve(null)
+      success: (res) => resolve(res.statusCode === 200 ? (res.data && res.data.features) || [] : []),
+      fail: () => resolve([])
     });
   });
+}
+
+function pickPlaceFeature(features) {
+  for (const type of PLACE_PRIORITY) {
+    const hit = features.find((f) => (f.place_type || []).indexOf(type) >= 0);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * 经纬度 -> 地名（未做大小写 / 拼音处理，交给 place-name.js）
+ * @param {'en'|'zh'} lang
+ * @returns {Promise<{name:string, country:string}|null>} 失败或无 token 时为 null
+ */
+async function reverseGeocode(lat, lon, lang) {
+  if (!hasToken()) return null;
+  const features = await geocodingRequest(`${lon.toFixed(6)},${lat.toFixed(6)}`, {
+    types: PLACE_PRIORITY.join(','),
+    language: mapboxLanguage(lang)
+  });
+  const picked = pickPlaceFeature(features);
+  if (!picked) return null;
+  const country = (picked.context || []).find((c) => /^country/.test(c.id || ''));
+  return {
+    name: String(picked.text || ''),
+    country: country ? String(country.text || '') : ''
+  };
+}
+
+/**
+ * 全球地点搜索（Mapbox 正向地理编码），用于替代仅覆盖国内的 wx.chooseLocation。
+ * @returns {Promise<Array<{name:string, address:string, lat:number, lon:number}>>}
+ */
+async function searchPlaces(keyword, lang) {
+  const q = String(keyword || '').trim();
+  if (!hasToken() || !q) return [];
+  const features = await geocodingRequest(encodeURIComponent(q), {
+    autocomplete: 'true',
+    limit: 8,
+    language: mapboxLanguage(lang)
+  });
+  return features
+    .filter((f) => Array.isArray(f.center) && f.center.length === 2)
+    .map((f) => ({
+      name: String(f.text || ''),
+      address: String(f.place_name || ''),
+      lon: f.center[0],
+      lat: f.center[1]
+    }));
 }
 
 /* ------------------------------------------------------------------ */
@@ -178,6 +213,8 @@ module.exports = {
   buildStaticMapUrl,
   downloadImage,
   reverseGeocode,
+  searchPlaces,
+  mapboxLanguage,
   gcj02ToWgs84,
   centerForPinAt
 };
