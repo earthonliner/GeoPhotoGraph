@@ -69,6 +69,7 @@ function createWx(overrides) {
     sheet: [],
     save: [],
     chooseMedia: 0,
+    chooseMessageFile: [],
     chooseCounts: [],
     snapshot: [],
     vibrate: [],
@@ -115,6 +116,10 @@ function createWx(overrides) {
       calls.chooseMedia += 1;
       calls.chooseCounts.push(o.count);
       o.success({ tempFiles: wx.files.slice(0, o.count).map((f) => ({ tempFilePath: f })) });
+    },
+    chooseMessageFile(o) {
+      calls.chooseMessageFile.push({ count: o.count, type: o.type });
+      o.success({ tempFiles: wx.files.slice(0, o.count).map((f) => ({ path: f, name: f })) });
     },
     getImageInfo(o) {
       o.success({ width: 1600, height: 1200 });

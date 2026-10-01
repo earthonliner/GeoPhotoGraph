@@ -246,7 +246,7 @@ test('批量：导入与下载只对月度、年度、买断和邀请码开放�
   // “+”：只能重新选择；批量导入入口说明这是会员功能
   wx.sheetTap = 1;
   await page.onTapAddTile();
-  assert.deepStrictEqual(wx.calls.sheet.pop(), ['重新选择照片', '批量导入（会员功能）']);
+  assert.deepStrictEqual(wx.calls.sheet.pop(), ['重新选择照片', '批量导入（会员功能）', '从聊天选原图']);
   assert.ok(page.data.paywallVisible);
   assert.strictEqual(page.data.paywallNotice, BATCH_NOTICE);
   assert.strictEqual(wx.calls.chooseMedia, 1);
@@ -917,7 +917,7 @@ test('批量编辑：地点和日期可统一应用到全部照片，“+” 可
   wx.sheetTap = 0;
   wx.files = ['d.jpg', 'e.jpg'];
   await page.onTapAddTile();
-  assert.deepStrictEqual(wx.calls.sheet.pop(), ['继续添加照片', '重新选择（替换全部）']);
+  assert.deepStrictEqual(wx.calls.sheet.pop(), ['继续添加照片', '重新选择（替换全部）', '从聊天添加原图']);
   assert.strictEqual(page.data.itemCount, 5);
   wx.sheetTap = 1;
   wx.files = ['x.jpg'];
@@ -929,6 +929,73 @@ test('批量编辑：地点和日期可统一应用到全部照片，“+” 可
   wx.sheetTap = 0;
   wx.files = ['z.jpg'];
   await page.onTapAddTile();
-  assert.deepStrictEqual(wx.calls.sheet.pop(), ['重新选择（替换全部）']);
+  assert.deepStrictEqual(wx.calls.sheet.pop(), ['重新选择（替换全部）', '从聊天选原图']);
   assert.strictEqual(page.data.itemCount, 1);
+});
+
+test('删除照片：只有一张时点 ✕ 回到空白状态，可以重新选图', async () => {
+  const wx = createWx();
+  const page = createPage(wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  assert.strictEqual(page.data.itemCount, 1);
+  const id = page.data.currentId;
+  page.onRemoveItem(tap({ id }));
+  assert.strictEqual(page.items.length, 0);
+  assert.strictEqual(page.data.hasPhoto, false);
+  assert.strictEqual(page.data.itemCount, 0);
+  await page.onChoosePhoto();
+  assert.strictEqual(page.data.itemCount, 1);
+  assert.strictEqual(page.data.hasPhoto, true);
+});
+
+test('缩略图上的 ✕ 与勾选框不会被当前项的描边层盖住', () => {
+  const wxss = require('fs').readFileSync(require('path').join(__dirname, '../pages/index/index.wxss'), 'utf8');
+  const rule = (sel) => wxss.match(new RegExp(`${sel.replace(/[.:]/g, '\\$&')} \\{([^}]*)\\}`))[1];
+  const z = (css) => Number((css.match(/z-index:\s*(\d+)/) || [0, 0])[1]);
+  const outline = rule('.thumb-current::after');
+  assert.match(outline, /pointer-events:\s*none/, '描边层不拦截点击');
+  assert.ok(z(rule('.thumb-hit')) > z(outline), '点击热区位于描边层之上');
+});
+
+test('从聊天选原图：用 chooseMessageFile 导入，支持继续添加与替换，取消不报错', async () => {
+  const wx = createWx();
+  wx.files = ['k.jpg'];
+  wx.modalConfirm = false;
+  const page = createPage(wx);
+  page.onLoad();
+  await page.onChooseFromChat();
+  assert.deepStrictEqual(wx.calls.chooseMessageFile, [{ count: 1, type: 'image' }]);
+  assert.strictEqual(wx.calls.chooseMedia, 0);
+  assert.strictEqual(page.poster.photoPath, 'k.jpg');
+  assert.strictEqual(page.poster.place, 'KYOTO');
+  assert.strictEqual(wx.calls.modal.length, 0, '读到定位就不再提示');
+
+  wx.files = ['b.jpg'];
+  await page.onChooseFromChat();
+  assert.strictEqual(page.poster.place, 'UNKNOWN');
+  assert.ok(!wx.calls.modal[0].content.includes('文件传输助手'), '已经是聊天原图，不再建议换成聊天');
+  await page.onChoosePhoto();
+  assert.ok(wx.calls.modal[1].content.includes('文件传输助手'), '相册来源的提示指向聊天原图');
+
+  wx.chooseMessageFile = (o) => o.fail({ errMsg: 'chooseMessageFile:fail cancel' });
+  await page.onChooseFromChat();
+  assert.deepStrictEqual(wx.calls.toast, []);
+  wx.chooseMessageFile = (o) => o.fail({ errMsg: 'chooseMessageFile:fail internal error' });
+  await page.onChooseFromChat();
+  assert.strictEqual(wx.calls.toast.pop(), '选择照片失败，请重试');
+});
+
+test('从聊天添加原图：会员可追加到已有照片之后', async () => {
+  const wx = createWx();
+  wx.store['geopics.membership'] = { invite: true };
+  const page = createPage(wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  wx.files = ['k.jpg', 'b.jpg'];
+  wx.sheetTap = 2;
+  await page.onTapAddTile();
+  assert.deepStrictEqual(wx.calls.sheet.pop(), ['继续添加照片', '重新选择照片', '从聊天添加原图']);
+  assert.deepStrictEqual(wx.calls.chooseMessageFile, [{ count: 8, type: 'image' }]);
+  assert.strictEqual(page.data.itemCount, 3);
 });

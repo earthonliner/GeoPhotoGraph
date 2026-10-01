@@ -385,6 +385,8 @@
 
 .thumb-current::after {
   content: '';
+  pointer-events: none;
+  z-index: 1;
   position: absolute;
   left: 0;
   top: 0;
@@ -437,6 +439,7 @@
 .thumb-hit {
   position: absolute;
   top: 0;
+  z-index: 2;
   width: 60rpx;
   height: 60rpx;
 }

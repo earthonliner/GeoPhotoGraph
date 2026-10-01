@@ -713,20 +713,24 @@ Page({
     const canAdd = this.items.length < MAX_BATCH;
     const replace = this.items.length > 1 ? '重新选择（替换全部）' : '重新选择照片';
     // 非会员只能一张一张做：第二项说明批量是会员功能
-    const itemList = !batch ? [replace, '批量导入（会员功能）'] : canAdd ? ['继续添加照片', replace] : [replace];
+    const actions = [];
+    if (batch && canAdd) actions.push(['继续添加照片', () => this.onAddPhotos()]);
+    actions.push([replace, () => this.onChoosePhoto()]);
+    if (!batch) actions.push(['批量导入（会员功能）', () => this.requireBatch(() => this.resumeAddPhotos())]);
+    if (batch && canAdd) actions.push(['从聊天添加原图', () => this.chooseAndImport(true, 'chat')]);
+    else actions.push(['从聊天选原图', () => this.chooseAndImport(false, 'chat')]);
     let tapIndex;
     try {
-      ({ tapIndex } = await wxp('showActionSheet', { itemList }));
+      ({ tapIndex } = await wxp('showActionSheet', { itemList: actions.map((a) => a[0]) }));
     } catch (e) {
       return;
     }
-    if (!batch) {
-      if (tapIndex === 0) await this.onChoosePhoto();
-      else this.requireBatch(() => this.resumeAddPhotos());
-      return;
-    }
-    if (canAdd && tapIndex === 0) await this.onAddPhotos();
-    else await this.onChoosePhoto();
+    await actions[tapIndex][1]();
+  },
+
+  // 从相册选图时微信常把定位信息去掉；聊天里以“文件”发送的原图则保持完整
+  onChooseFromChat() {
+    return this.chooseAndImport(false, 'chat');
   },
 
   // 购买会员后继续刚才想做的批量导入；买的若是单张（不含批量）则不再打扰
@@ -735,7 +739,7 @@ Page({
     return null;
   },
 
-  async chooseAndImport(append) {
+  async chooseAndImport(append, source = 'album') {
     if (this.singlePage) {
       wx.showToast({ title: '请点击下方「前往小程序」后使用', icon: 'none' });
       return;
@@ -752,14 +756,19 @@ Page({
     }
     let files;
     try {
-      const res = await wxp('chooseMedia', {
-        count: remain,
-        mediaType: ['image'],
-        // 必须原图：压缩后的图片会丢失 EXIF（含 GPS）
-        sizeType: ['original'],
-        sourceType: ['album']
-      });
-      files = res.tempFiles.map((f) => f.tempFilePath);
+      if (source === 'chat') {
+        const res = await wxp('chooseMessageFile', { count: remain, type: 'image' });
+        files = res.tempFiles.map((f) => f.path);
+      } else {
+        const res = await wxp('chooseMedia', {
+          count: remain,
+          mediaType: ['image'],
+          // 必须原图：压缩后的图片会丢失 EXIF（含 GPS）
+          sizeType: ['original'],
+          sourceType: ['album']
+        });
+        files = res.tempFiles.map((f) => f.tempFilePath);
+      }
     } catch (e) {
       if (isCancel(e)) return;
       console.error('choose media failed', e);
@@ -819,7 +828,10 @@ Page({
     if (created.length === 1) {
       const modal = await wxp('showModal', {
         title: '未读取到位置',
-        content: '这张照片没有定位信息（拍摄时未开启定位，或经聊天转发后被移除），可以手动选择拍摄地点。',
+        content:
+          source === 'chat'
+            ? '这张照片没有定位信息（拍摄时未开启定位，或已被编辑、截图），可以手动选择拍摄地点。'
+            : '这张照片没有读到定位信息。微信从相册选图时常会去掉位置，可把原图用「文件传输助手」以文件形式发给自己，再点预览下方的「从聊天选原图」导入；也可以先手动选择拍摄地点。',
         confirmText: '去选择',
         cancelText: '暂不',
         confirmColor: TINT
