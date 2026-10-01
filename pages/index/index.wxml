@@ -332,7 +332,7 @@
         <block wx:else>
           <view class="group">
             <view class="cell cell-tall">
-              <text class="pw-unavailable">由于相关规范，iOS 暂不支持在小程序内购买</text>
+              <text class="pw-unavailable">{{purchaseNote}}</text>
             </view>
           </view>
           <text class="section-foot">每保存一张 {{exportSize}} 无水印高清海报消耗 1 个额度，同一张照片同一模板再次保存不重复计费。</text>
