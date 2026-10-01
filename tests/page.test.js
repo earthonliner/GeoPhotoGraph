@@ -6,6 +6,7 @@ const exifParser = require('../utils/exif-parser');
 const mapService = require('../utils/map-service');
 const membership = require('../utils/membership');
 const platform = require('../utils/platform');
+const securityUtil = require('../utils/security');
 const { createHandler } = require('../cloudfunctions/api/handler');
 const { createFakeCloud } = require('./helpers/fake-cloud');
 const { createFakeXpay, VIRTUAL_ENV } = require('./helpers/fake-xpay');
@@ -22,10 +23,12 @@ mapService.reverseGeocode = async (lat) => {
   return { name: city, parts: { city } };
 };
 
-const ORIGINAL = JSON.parse(JSON.stringify({ payment: config.payment, membership: config.membership }));
+const ORIGINAL = JSON.parse(JSON.stringify({ payment: config.payment, membership: config.membership, security: config.security }));
 test.beforeEach(() => {
   Object.assign(config.payment, JSON.parse(JSON.stringify(ORIGINAL.payment)), { mode: 'mock', purchaseEnabled: true });
   Object.assign(config.membership, JSON.parse(JSON.stringify(ORIGINAL.membership)));
+  Object.assign(config.security, ORIGINAL.security);
+  securityUtil.clearCache();
   mapService.hasToken = () => false;
 });
 test.afterEach(() => {
@@ -1208,4 +1211,201 @@ test('app.json 声明了 getFuzzyLocation 及其用途说明', () => {
   assert.ok(app.requiredPrivateInfos.includes('getFuzzyLocation'));
   assert.ok(app.permission['scope.userFuzzyLocation'].desc.length > 0);
   assert.ok(app.permission['scope.userLocation'].desc.length > 0);
+});
+
+/* ---------------------------- 内容安全 ---------------------------- */
+
+// 云模式页面 + 内容安全：上传的副本进入 fake.files；wx.cloud.uploadFile 返回 seccheck/ 下的 fileID
+function securitySetup(extra) {
+  config.security.pollMs = 0;
+  config.security.importWaitMs = 40;
+  config.security.saveWaitMs = 40;
+  config.security.watchMs = 5;
+  config.security.watchRounds = 40;
+  const env = cloudSetup();
+  const { fake } = env;
+  let n = 0;
+  env.wx.cloud.uploadFile = async ({ cloudPath }) => {
+    const fileID = `cloud://env.x/${cloudPath}`;
+    fake.files[fileID] = 1;
+    n += 1;
+    return { fileID };
+  };
+  env.wx.files = ['k.jpg'];
+  env.wx.modalConfirm = false;
+  env.push = (traceId, suggest) => env.main({ Event: 'wxa_media_check', MsgType: 'event', trace_id: traceId, result: { suggest } });
+  // 默认：提交后立即收到推送，按文件序号决定结果
+  env.verdict = () => 'pass';
+  fake.setMediaCheckAsync(async () => {
+    const traceId = `t${++env.traces}`;
+    const suggest = env.verdict(traceId);
+    if (suggest) setTimeout(() => env.push(traceId, suggest), 0);
+    return { errCode: 0, traceId };
+  });
+  env.traces = 0;
+  return Object.assign(env, extra);
+}
+
+test('内容安全：导入的照片通过检测后保留，云存储里的副本被删除', async () => {
+  const env = securitySetup();
+  const page = createPage(env.wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  assert.strictEqual(page.data.itemCount, 1);
+  assert.strictEqual(page.items[0].sec.status, 'pass');
+  assert.strictEqual(env.fake.calls.mediaCheckAsync.length, 1);
+  const call = env.fake.calls.mediaCheckAsync[0];
+  assert.deepStrictEqual([call.media_type, call.version], [2, 2]);
+  assert.strictEqual(env.wx.calls.modal.length, 0);
+  assert.deepStrictEqual(Object.keys(env.fake.files), [], '副本已删除');
+  assert.ok(env.count('imageResult') >= 1);
+});
+
+test('内容安全：违规照片被移除并提示，其余照片保留', async () => {
+  const env = securitySetup();
+  env.verdict = (id) => (id === 't2' ? 'risky' : 'pass');
+  env.wx.files = ['k.jpg', 'b.jpg', 'a.jpg'];
+  env.wx.store['geopics.membership'] = { invite: true };
+  const page = createPage(env.wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  assert.strictEqual(page.data.itemCount, 2);
+  assert.deepStrictEqual(page.items.map((it) => it.photoPath), ['k.jpg', 'a.jpg']);
+  const modal = env.wx.calls.modal.find((m) => m.title === '内容含违规信息');
+  assert.strictEqual(modal.content, '这张照片含违规信息，已移除。');
+
+  // 只有一张且违规：回到空白状态，可重新选图
+  const single = securitySetup();
+  single.verdict = () => 'risky';
+  const page2 = createPage(single.wx);
+  page2.onLoad();
+  await page2.onChoosePhoto();
+  assert.strictEqual(page2.data.hasPhoto, false);
+  assert.strictEqual(page2.data.itemCount, 0);
+  assert.ok(single.wx.calls.modal.some((m) => m.title === '内容含违规信息'));
+});
+
+test('内容安全：导入时还没出结果的照片先保留，之后判为违规会被移除；保存前会再等一次', async () => {
+  const env = securitySetup();
+  env.verdict = () => '';
+  const page = createPage(env.wx);
+  page.onLoad();
+  const started = Date.now();
+  await page.onChoosePhoto();
+  assert.ok(Date.now() - started < 1000, '导入不会一直等下去');
+  assert.strictEqual(page.items[0].sec.status, 'pending');
+  assert.strictEqual(page.data.itemCount, 1);
+
+  env.push('t1', 'risky');
+  await sleep(120);
+  assert.strictEqual(page.data.itemCount, 0, '后台等到违规结果后移除');
+  assert.ok(env.wx.calls.modal.some((m) => m.title === '内容含违规信息'));
+
+  // 保存时还在 pending：等到 saveWaitMs 后按通过处理（检测服务慢不应卡住用户）
+  const slow = securitySetup();
+  slow.verdict = () => '';
+  const page2 = createPage(slow.wx);
+  page2.onLoad();
+  await page2.onChoosePhoto();
+  await page2.onSavePoster();
+  assert.strictEqual(slow.wx.calls.save.length, 1);
+
+  // 保存时才拿到违规结果：不保存
+  const late = securitySetup();
+  late.verdict = () => '';
+  const page3 = createPage(late.wx);
+  page3.onLoad();
+  await page3.onChoosePhoto();
+  late.push('t1', 'risky');
+  await page3.onSavePoster();
+  assert.strictEqual(late.wx.calls.save.length, 0);
+  assert.strictEqual(page3.data.hasPhoto, false);
+});
+
+test('内容安全：检测服务不可用时放行，不影响使用', async () => {
+  const env = securitySetup();
+  env.fake.setMediaCheckAsync(async () => {
+    throw { errCode: 45009, errMsg: 'quota' };
+  });
+  const page = createPage(env.wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  assert.strictEqual(page.data.itemCount, 1);
+  assert.strictEqual(page.items[0].sec.status, 'skipped');
+
+  env.wx.cloud.uploadFile = async () => {
+    throw new Error('offline');
+  };
+  await page.onChoosePhoto();
+  assert.strictEqual(page.data.itemCount, 1);
+  assert.strictEqual(page.items[0].sec.status, 'skipped');
+});
+
+test('内容安全：手动输入的违规地名被恢复，不会出现在海报标题和转发里；正常地名可用', async () => {
+  const env = securitySetup();
+  env.fake.setMsgSecCheck(async ({ content }) => ({ errCode: 0, result: { suggest: content === 'BADWORD' ? 'risky' : 'pass' } }));
+  const page = createPage(env.wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  assert.strictEqual(page.poster.place, 'KYOTO');
+
+  page.onPlaceInput({ detail: { value: 'BADWORD' } });
+  assert.strictEqual(page.shareTitle(), 'GEOPICS · 把照片与它发生的地方，做成一张海报', '未检测通过前不进转发标题');
+  await page.onPlaceCommit();
+  assert.strictEqual(env.wx.calls.toast.pop(), '内容含违规信息，请修改');
+  assert.strictEqual(page.poster.place, 'KYOTO');
+  assert.strictEqual(page.poster.placeManual, false);
+  assert.strictEqual(page.data.place, 'KYOTO');
+
+  page.onPlaceInput({ detail: { value: 'MY TRIP' } });
+  await page.onPlaceCommit();
+  assert.strictEqual(page.poster.place, 'MY TRIP');
+  assert.strictEqual(page.shareTitle(), '「MY TRIP」· 用 GEOPICS 做的地图海报');
+  assert.strictEqual(env.fake.calls.msgSecCheck.length, 2);
+  await page.onPlaceCommit();
+  assert.strictEqual(env.fake.calls.msgSecCheck.length, 2, '同一段文本只检测一次');
+  assert.deepStrictEqual(env.fake.calls.msgSecCheck[0], { openid: 'openid-a', scene: 4, version: 2, content: 'BADWORD' });
+});
+
+test('内容安全：保存与转发前再检查一次手动地名，违规则不保存、转发使用默认标题', async () => {
+  const env = securitySetup();
+  env.fake.setMsgSecCheck(async ({ content }) => ({ errCode: 0, result: { suggest: content === 'BADWORD' ? 'risky' : 'pass' } }));
+  const page = createPage(env.wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  page.onPlaceInput({ detail: { value: 'BADWORD' } });
+  await page.onSavePoster();
+  assert.strictEqual(env.wx.calls.save.length, 0);
+  assert.strictEqual(env.wx.calls.toast.pop(), '内容含违规信息，请修改');
+  assert.strictEqual(page.poster.place, 'KYOTO');
+  await page.onSavePoster();
+  assert.strictEqual(env.wx.calls.save.length, 1, '改回自动地名后可以保存');
+
+  page.onPlaceInput({ detail: { value: 'BADWORD' } });
+  const share = await page.onShareAppMessage().promise;
+  assert.strictEqual(share.title, '「KYOTO」· 用 GEOPICS 做的地图海报', '违规地名被恢复为自动地名，标题只用自动地名');
+  assert.strictEqual(share.imageUrl, undefined, '违规时不生成带该文字的转发图');
+  assert.strictEqual(page.poster.place, 'KYOTO');
+});
+
+test('内容安全：地名检测服务不可用时放行；测试支付模式下不检测', async () => {
+  const env = securitySetup();
+  env.fake.setMsgSecCheck(async () => {
+    throw { errCode: 45009, errMsg: 'quota' };
+  });
+  const page = createPage(env.wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  page.onPlaceInput({ detail: { value: 'ANYWHERE' } });
+  assert.strictEqual(await page.checkPlaceText(page.poster), true);
+  assert.strictEqual(page.poster.place, 'ANYWHERE');
+
+  config.payment.mode = 'mock';
+  const wx = createWx({ cloud: { callFunction: async () => { throw new Error('must not call'); } } });
+  const mockPage = createPage(wx);
+  mockPage.onLoad();
+  await mockPage.onChoosePhoto();
+  mockPage.onPlaceInput({ detail: { value: 'ANYWHERE' } });
+  assert.strictEqual(await mockPage.checkPlaceText(mockPage.poster), true);
+  assert.strictEqual(mockPage.items[0].sec, undefined);
 });

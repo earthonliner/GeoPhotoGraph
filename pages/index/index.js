@@ -5,6 +5,7 @@ const themes = require('../../utils/themes');
 const batchUtil = require('../../utils/batch');
 const membership = require('../../utils/membership');
 const payment = require('../../utils/payment');
+const security = require('../../utils/security');
 const platform = require('../../utils/platform');
 const appConfig = require('../../utils/config');
 const { POSTER_W, POSTER_H, FOOTER_H, MAX_CROP_ZOOM, clamp } = require('../../utils/poster/core.js');
@@ -77,6 +78,8 @@ function isPrivacyDenied(err) {
 function tick() {
   if (wx.vibrateShort) wx.vibrateShort({ type: 'light', fail() {} });
 }
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function keepScreenOn(on) {
   if (wx.setKeepScreenOn) wx.setKeepScreenOn({ keepScreenOn: on, fail() {} });
@@ -285,6 +288,7 @@ Page({
   },
 
   onUnload() {
+    this._unloaded = true;
     if (this._titleObserver) this._titleObserver.disconnect();
     clearTimeout(this._syncTimer);
   },
@@ -818,6 +822,7 @@ Page({
     this.ensureCategory();
     this.syncView();
     this.render();
+    this.startImageChecks(created);
 
     if (mapService.hasToken() && created.some((it) => it.exif.hasGps)) this.setData({ busyText: '获取地名…' });
     await Promise.all(
@@ -830,11 +835,118 @@ Page({
         return null;
       })
     );
+    if (created.some((it) => it.sec && it.sec.status === 'pending')) this.setData({ busyText: '检查图片内容…' });
+    const risky = await this.settleImages(created, appConfig.security.importWaitMs);
     this.hideBusy();
+    if (risky.length) await this.dropRisky(risky);
+    this.watchImages(created);
 
-    const missing = created.filter((it) => it.lat === null);
+    const kept = created.filter((it) => this.items.includes(it));
+    const missing = kept.filter((it) => it.lat === null);
     if (!missing.length) return;
-    await this.promptMissingLocation(created, missing);
+    await this.promptMissingLocation(kept, missing);
+  },
+
+  /* ---------------------------- 内容安全 ---------------------------- */
+
+  // 导入后立即在后台提交检测（与读取地名并行）；结果在 settleImages 里收取
+  startImageChecks(items) {
+    if (!security.enabled()) return;
+    items.forEach((item) => {
+      const sec = { status: 'pending', traceId: '', submitted: null };
+      sec.submitted = security.submitImage(item.photoPath).then((traceId) => {
+        if (traceId) sec.traceId = traceId;
+        else sec.status = 'skipped';
+      });
+      item.sec = sec;
+    });
+  },
+
+  // 等待检测结果，最多 waitMs；返回其中违规的照片。没有结果的保持 pending，由后台继续等或保存前再等
+  async settleImages(items, waitMs) {
+    const { pollMs } = appConfig.security;
+    const deadline = Date.now() + waitMs;
+    const waiting = () => items.filter((it) => it.sec && it.sec.status === 'pending');
+    for (;;) {
+      await Promise.all(
+        waiting().map(async (it) => {
+          await it.sec.submitted;
+          if (it.sec.status !== 'pending') return;
+          const status = await security.imageStatus(it.sec.traceId);
+          if (status === 'pass' || status === 'risky') it.sec.status = status;
+          else if (status === 'unknown') it.sec.status = 'skipped';
+        })
+      );
+      if (!waiting().length || Date.now() >= deadline) break;
+      await sleep(pollMs);
+    }
+    return items.filter((it) => it.sec && it.sec.status === 'risky');
+  },
+
+  // 导入时没来得及出结果的照片，继续在后台等；之后判为违规就移除
+  watchImages(items) {
+    const pending = items.filter((it) => it.sec && it.sec.status === 'pending');
+    if (!pending.length) return;
+    const { watchMs, watchRounds } = appConfig.security;
+    (async () => {
+      for (let i = 0; i < watchRounds && !this._unloaded; i += 1) {
+        await sleep(watchMs);
+        const live = pending.filter((it) => this.items.includes(it));
+        const risky = await this.settleImages(live, 0);
+        if (risky.length) await this.dropRisky(risky);
+        if (!live.some((it) => it.sec.status === 'pending')) return;
+      }
+    })().catch((e) => console.warn('watch images failed', e));
+  },
+
+  async dropRisky(items) {
+    const gone = items.filter((it) => this.items.includes(it));
+    if (!gone.length) return;
+    gone.forEach((it) => this.removeItem(it));
+    await wxp('showModal', {
+      title: '内容含违规信息',
+      content: gone.length > 1 ? `有 ${gone.length} 张照片含违规信息，已移除。` : '这张照片含违规信息，已移除。',
+      showCancel: false,
+      confirmText: '知道了',
+      confirmColor: TINT
+    }).catch(() => {});
+  },
+
+  // 用户手动输入的地名：违规时恢复为自动地名
+  async checkPlaceText(item) {
+    const text = (item.place || '').trim();
+    if (!item.placeManual || !text) return true;
+    if (await security.isTextSafe(text)) return true;
+    if ((item.place || '').trim() === text) {
+      item.placeManual = false;
+      if (item.lat !== null) {
+        item.place = 'LOCATING…';
+        this.touch(item);
+        this.resolvePlace(item, ++item.locId);
+      } else {
+        item.place = 'UNKNOWN';
+        this.touch(item, true);
+      }
+      wx.showToast({ title: '内容含违规信息，请修改', icon: 'none' });
+    }
+    return false;
+  },
+
+  onPlaceCommit() {
+    return this.checkPlaceText(this.poster);
+  },
+
+  // 保存 / 转发前的最后一道检查：图片结果（必要时再等一会儿）与手动输入的地名
+  async ensureSafe(items) {
+    const risky = await this.settleImages(items, appConfig.security.saveWaitMs);
+    if (risky.length) {
+      await this.dropRisky(risky);
+      return false;
+    }
+    for (const item of items) {
+      if (!(await this.checkPlaceText(item))) return false;
+    }
+    return true;
   },
 
   // 微信出于隐私保护，选图时常会去掉照片里的定位（iOS 上几乎总是如此），读不到并不是照片或解析的问题。
@@ -912,7 +1024,10 @@ Page({
 
   onRemoveItem(e) {
     const item = this.findItem(e.currentTarget.dataset.id);
-    if (!item) return;
+    if (item) this.removeItem(item);
+  },
+
+  removeItem(item) {
     const idx = this.items.indexOf(item);
     this.items.splice(idx, 1);
     item.locId += 1;
@@ -1689,6 +1804,8 @@ Page({
   shareTitle() {
     const place = this.data.hasPhoto ? (this.poster.place || '').trim() : '';
     if (!place || place === 'UNKNOWN' || place === 'LOCATING…') return SHARE_TITLE;
+    // 手动输入的地名要检测通过后才能出现在转发标题里
+    if (this.poster.placeManual && security.enabled() && security.cachedVerdict(place) !== true) return SHARE_TITLE;
     return `「${place}」· 用 GEOPICS 做的地图海报`;
   },
 
@@ -1696,12 +1813,16 @@ Page({
   // 3 秒内没生成完时，微信使用不带 imageUrl 的默认内容
   onShareAppMessage() {
     const share = { title: this.shareTitle(), path: '/pages/index/index' };
-    const promise = this.composeShareImage()
+    const promise = this.checkPlaceText(this.poster)
+      .then((safe) => (safe ? this.composeShareImage() : ''))
       .catch((e) => {
         console.warn('compose share image failed', e);
         return '';
       })
-      .then((imageUrl) => (imageUrl ? Object.assign({ imageUrl }, share) : share));
+      .then((imageUrl) => {
+        const checked = Object.assign({}, share, { title: this.shareTitle() });
+        return imageUrl ? Object.assign({ imageUrl }, checked) : checked;
+      });
     return Object.assign({ promise }, share);
   },
 
@@ -1886,6 +2007,10 @@ Page({
     const upfront = !payment.isMock();
     const progress = (i) => (total > 1 ? `导出 ${i + 1}/${total}…` : '生成高清海报…');
     this.showBusy(progress(0));
+    if (!(await this.ensureSafe(items))) {
+      this.hideBusy();
+      return;
+    }
     if (total > 1) keepScreenOn(true);
 
     for (let i = 0; i < total && !stop; i += 1) {

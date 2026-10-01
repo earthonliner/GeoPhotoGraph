@@ -56,6 +56,16 @@ module.exports = {
     lifetime: { id: 'lifetime', name: '买断会员', desc: '一次买断，永久有效，每月 120 张', price: 29900, monthly: 120 },
     single: { name: '单张解锁', desc: '解锁一张无水印高清图，任意模板，不含批量', price: 129 }
   },
+  // 内容安全：用户输入的地名（会出现在海报、转发标题里）与导入的照片，通过云函数调用微信内容安全接口检测。
+  // 仅 payment.mode = 'cloud' 时生效；检测服务不可用时放行。时间单位为毫秒
+  security: {
+    enabled: true,
+    importWaitMs: 8000,
+    saveWaitMs: 6000,
+    pollMs: 1200,
+    watchMs: 3000,
+    watchRounds: 30
+  },
   payment: {
     // 'mock'：开发调试，弹窗确认后直接视为支付成功（不产生任何扣款），权益只存本地
     // 'cloud'：微信云开发。下单、入账、额度扣减、邀请码都在云函数 api 里完成，

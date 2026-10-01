@@ -9,6 +9,9 @@
  *   consume               { items: [{ key, tpl }] } -> { ok, state } | { ok:false, code:'insufficient', state }
  *                         key 相同只计费一次；tpl 是海报所用模板，免费模板先用免费额度
  *   redeemInvite          { code } -> { ok, valid, state }
+ *   checkText             { text } -> { ok, safe }                     文本内容安全（msgSecCheck），见 security.js
+ *   checkImage            { fileID } -> { ok, traceId } | { ok, skipped }  提交云存储里的图片副本做安全检测（mediaCheckAsync）
+ *   imageResult           { traceId } -> { ok, status: 'pending'|'pass'|'risky'|'unknown' }
  * 支付通道由环境变量 PAY_CHANNEL 决定：
  *   virtual（默认）小程序虚拟支付 wx.requestVirtualPayment，iOS 走 Apple 支付、其他平台走微信支付。
  *     createOrder 需要 code（wx.login 的临时登录凭证）用来换 session_key 做用户态签名，返回 { virtual: { mode, signData, paySig, signature } }
@@ -19,6 +22,7 @@
  *
  * 数据库集合（权限一律设为“仅云函数可读写”，小程序端不能直接访问）：
  *   users   _id = openid    { invite, bought, freeMonth, freeUsed, singles, lifetime, packs, charged, inviteFails, ... }
+ *   seccheck _id = trace_id  { openid, fileID, status: 'pending'|'pass'|'risky'|'expired', createdAt, checkedAt }
  *   orders  _id = 商户订单号  { openid, channel, productId, kind, planId, title, totalFee, status, createdAt, paidAt, transactionId }
  *
  * 环境变量：PAY_CHANNEL、INVITE_CODES（邀请码，逗号分隔）；
@@ -28,6 +32,7 @@
 const catalog = require('./catalog');
 const quota = require('./quota');
 const { createXpay } = require('./xpay');
+const { createSecurity } = require('./security');
 
 const CHARGED_KEEP = 300;
 const MAX_KEYS = 20;
@@ -55,6 +60,7 @@ function createHandler(deps) {
   const db = cloud.database();
   const users = db.collection('users');
   const orders = db.collection('orders');
+  const security = createSecurity({ cloud, db, now });
 
   function randomText(len, alphabet) {
     let out = '';
@@ -370,6 +376,7 @@ function createHandler(deps) {
     const ev = event || {};
     if (!ev.action) {
       if (typeof ev.Event === 'string' && ev.Event.startsWith('xpay_')) return onXpayNotify(ev);
+      if (ev.Event === 'wxa_media_check') return security.onMediaCheck(ev);
       if (ev.returnCode !== undefined || ev.outTradeNo) return onPayNotify(ev);
       return { ok: false, code: 'bad_request' };
     }
@@ -387,6 +394,12 @@ function createHandler(deps) {
           return await consume(openid, ev.items);
         case 'redeemInvite':
           return await redeemInvite(openid, ev.code);
+        case 'checkText':
+          return await security.checkText(openid, ev.text);
+        case 'checkImage':
+          return await security.checkImage(openid, ev.fileID);
+        case 'imageResult':
+          return await security.imageResult(openid, ev.traceId);
         default:
           return { ok: false, code: 'bad_request', message: 'unknown action' };
       }
