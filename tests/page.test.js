@@ -1113,3 +1113,78 @@ test('全部没有位置：确认后为当前照片选点，再一起用于其�
   assert.strictEqual(wx.calls.modal[2].title, '同时用于其他照片？');
   assert.ok(page.items.every((it) => it.place === 'ZERMATT'));
 });
+
+const fuzzy = (wx, result) => {
+  wx.calls.fuzzy = [];
+  wx.getFuzzyLocation = (o) => {
+    wx.calls.fuzzy.push(o.type);
+    if (result.fail) o.fail(result.fail);
+    else o.success(result);
+  };
+};
+
+test('使用当前所在城市：点按时获取一次模糊位置，作为地点并记入「最近」', async () => {
+  const wx = createWx();
+  wx.files = ['b.jpg'];
+  fuzzy(wx, { latitude: 35.01, longitude: 135.77 });
+  const page = createPage(wx);
+  page.onLoad();
+  wx.modalConfirm = true;
+  wx.sheetTap = 0;
+  await page.onChoosePhoto();
+  assert.deepStrictEqual(wx.calls.sheet.pop(), ['使用当前所在城市', '地图选点（微信地图）']);
+  assert.deepStrictEqual(wx.calls.fuzzy, ['wgs84']);
+  assert.strictEqual(page.poster.lat, 35.01);
+  assert.strictEqual(page.poster.place, 'KYOTO');
+  assert.deepStrictEqual(wx.store['geopics.recentPlaces'].map((p) => p.name), ['KYOTO']);
+
+  // 多张没有位置时，同样可以一起使用
+  wx.store['geopics.membership'] = { invite: true };
+  wx.files = ['b.jpg', 'c.jpg'];
+  const multi = createPage(wx);
+  multi.onLoad();
+  await multi.onChoosePhoto();
+  assert.ok(multi.items.every((it) => it.place === 'KYOTO'));
+});
+
+test('使用当前所在城市：基础库不支持时不出现；被拒绝授权引导去设置；其他失败提示开启定位', async () => {
+  const wx = createWx();
+  wx.files = ['b.jpg'];
+  wx.modalConfirm = false;
+  const page = createPage(wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  wx.sheetTap = -1;
+  await page.onPickLocation();
+  assert.strictEqual(typeof wx.getFuzzyLocation, 'undefined');
+  assert.strictEqual(wx.calls.sheet.length, 0, '无接口且无最近地点时直接打开地图选点');
+
+  fuzzy(wx, { fail: { errMsg: 'getFuzzyLocation:fail auth deny' } });
+  wx.sheetTap = 0;
+  wx.modalConfirm = true;
+  await page.onPickLocation();
+  assert.strictEqual(wx.calls.modal.pop().title, '需要位置权限');
+  assert.strictEqual(wx.calls.openSetting, 1);
+  wx.modalConfirm = false;
+  await page.onPickLocation();
+  assert.strictEqual(wx.calls.openSetting, 1, '选“取消”不跳转设置');
+
+  fuzzy(wx, { fail: { errMsg: 'getFuzzyLocation:fail cancel' } });
+  const toasts = wx.calls.toast.length;
+  await page.onPickLocation();
+  assert.strictEqual(wx.calls.toast.length, toasts, '取消不提示');
+  fuzzy(wx, { fail: { errno: 104, errMsg: 'getFuzzyLocation:fail privacy permission is not authorized' } });
+  await page.onPickLocation();
+  assert.strictEqual(wx.calls.toast.pop(), '需同意隐私保护指引后才能获取位置');
+  fuzzy(wx, { fail: { errMsg: 'getFuzzyLocation:fail system permission denied' } });
+  await page.onPickLocation();
+  assert.strictEqual(wx.calls.toast.pop(), '无法获取当前位置，请确认手机已开启定位');
+  assert.strictEqual(page.poster.lat, null);
+});
+
+test('app.json 声明了 getFuzzyLocation 及其用途说明', () => {
+  const app = JSON.parse(require('fs').readFileSync(require('path').join(__dirname, '../app.json'), 'utf8'));
+  assert.ok(app.requiredPrivateInfos.includes('getFuzzyLocation'));
+  assert.ok(app.permission['scope.userFuzzyLocation'].desc.length > 0);
+  assert.ok(app.permission['scope.userLocation'].desc.length > 0);
+});

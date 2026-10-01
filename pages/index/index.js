@@ -980,6 +980,8 @@ Page({
       return;
     }
     const actions = this.recentPlaces.map((p) => [`最近：${p.name}`, () => this.applyManualLocation(p.lat, p.lon, p.name)]);
+    // 基础库低于 2.25.0 没有此接口
+    if (typeof wx.getFuzzyLocation === 'function') actions.push(['使用当前所在城市', () => this.useCurrentCity()]);
     // wx.chooseLocation 使用腾讯地图，海外无法定位；配置了 Mapbox 时提供全球搜索
     if (mapService.hasToken()) {
       actions.push(['搜索地点（全球）', () => this.openSearch()]);
@@ -1022,10 +1024,47 @@ Page({
     await this.applyManualLocation(wgs.lat, wgs.lon, loc.name || '', loc.name || loc.address);
   },
 
+  // 模糊位置只精确到城市级，正好够海报上的“城市大字”；仅在用户点按时获取一次
+  async useCurrentCity() {
+    let loc;
+    try {
+      loc = await wxp('getFuzzyLocation', { type: 'wgs84' });
+    } catch (e) {
+      if (isCancel(e)) return;
+      console.error('get fuzzy location failed', e);
+      await this.explainLocationFailure(e);
+      return;
+    }
+    if (!loc || typeof loc.latitude !== 'number') return;
+    await this.applyManualLocation(loc.latitude, loc.longitude, '', '', { remember: false });
+    const place = this.poster.place;
+    if (place && place !== 'UNKNOWN' && place !== 'LOCATING…') this.rememberPlace(loc.latitude, loc.longitude, place);
+  },
+
+  async explainLocationFailure(err) {
+    const msg = (err && err.errMsg) || '';
+    if (isPrivacyDenied(err)) {
+      wx.showToast({ title: '需同意隐私保护指引后才能获取位置', icon: 'none' });
+      return;
+    }
+    if (/auth deny|authorize no response|auth denied/i.test(msg)) {
+      const modal = await wxp('showModal', {
+        title: '需要位置权限',
+        content: '你之前没有允许获取位置。可以到设置里打开「位置信息」，或改用搜索 / 地图选点。',
+        confirmText: '去设置',
+        cancelText: '取消',
+        confirmColor: TINT
+      }).catch(() => ({ confirm: false }));
+      if (modal.confirm) wx.openSetting({ fail() {} });
+      return;
+    }
+    wx.showToast({ title: '无法获取当前位置，请确认手机已开启定位', icon: 'none' });
+  },
+
   // 手动选定的地点：记入“最近”，并询问是否一起用于其余没有位置的照片（手动改过地名的除外）
-  async applyManualLocation(lat, lon, name, label) {
+  async applyManualLocation(lat, lon, name, label, options = {}) {
     const target = this.poster;
-    this.rememberPlace(lat, lon, label || name);
+    if (options.remember !== false) this.rememberPlace(lat, lon, label || name);
     this.showBusy('生成海报…');
     await this.applyLocation(target, lat, lon, name);
     this.hideBusy();
