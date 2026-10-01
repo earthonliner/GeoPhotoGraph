@@ -9,10 +9,13 @@
     "backgroundColorBottom": "#f2f2f7",
     "backgroundTextStyle": "dark"
   },
-  "requiredPrivateInfos": ["chooseLocation"],
+  "requiredPrivateInfos": ["chooseLocation", "getFuzzyLocation"],
   "permission": {
     "scope.userLocation": {
       "desc": "用于在地图上手动选择照片的拍摄位置"
+    },
+    "scope.userFuzzyLocation": {
+      "desc": "照片没有定位信息时，可使用你当前所在城市作为海报上的地点"
     }
   },
   "style": "v2",

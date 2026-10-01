@@ -208,7 +208,7 @@
 ## 说明与限制
 
 - 必须选择原图（`sizeType: ['original']`），压缩图会丢失 EXIF；读取失败会提示并引导手动选点（全球搜索，或 `wx.chooseLocation` 微信地图选点，GCJ-02 会自动转换为 WGS-84）。
-- **微信会去掉照片里的定位**：出于隐私保护，`wx.chooseMedia` / `wx.chooseImage` 在 iOS 上返回的图片几乎都没有 GPS（日期等其他 EXIF 还在），部分安卓机型也会去掉；聊天里发送的照片同样会被去掉位置。这是微信的处理，小程序没有接口能拿回原始定位，因此产品上把“补一次地点”做顺：导入后直接引导「选择地点」，手动选过的地点记入「最近」（本机保存 3 个，`geopics.recentPlaces`），多张照片选好一张后可一键用于其余没有位置的照片。「+」菜单里的「从聊天记录选择」（`wx.chooseMessageFile`）用于导入聊天中收到的图片。
+- **微信会去掉照片里的定位**：出于隐私保护，`wx.chooseMedia` / `wx.chooseImage` 在 iOS 上返回的图片几乎都没有 GPS（日期等其他 EXIF 还在），部分安卓机型也会去掉；聊天里发送的照片同样会被去掉位置。这是微信的处理，小程序没有接口能拿回原始定位，因此产品上把“补一次地点”做顺：导入后直接引导「选择地点」，手动选过的地点记入「最近」（本机保存 3 个，`geopics.recentPlaces`），多张照片选好一张后可一键用于其余没有位置的照片。选点菜单还提供「使用当前所在城市」（`wx.getFuzzyLocation`，仅在点按时获取一次，精度为城市级，基础库 < 2.25.0 时隐藏该项；被拒绝授权时引导去设置）。「+」菜单里的「从聊天记录选择」（`wx.chooseMessageFile`）用于导入聊天中收到的图片。
 - 内置 EXIF 解析器取代 `exif-js`（后者依赖 DOM/XHR，无法在小程序中运行），支持 JPEG，并对 HEIC 做头部扫描兜底。
 - 图片的 EXIF 方向（Orientation）目前依赖微信 Canvas 对图片的默认处理，未做额外旋转。
 
@@ -217,8 +217,8 @@
 代码侧已就绪的配置：`payment.mode = 'cloud'`、`membership.inviteCodes` 为空、`payment.purchaseEnabled = false`（虚拟支付开通并验证后再改为 `true`）、`brand.qrcode` 已指向小程序码、提交到仓库的 `utils/config.local.js` 不含 token。上线前还需要在后台完成：
 
 1. **服务器域名**：小程序后台「开发管理 → 开发设置 → 服务器域名」，`request` 与 `downloadFile` 合法域名加入 `https://api.mapbox.com`（必须带 `https://`，不带端口与路径；每月修改次数有限）。
-2. **用户隐私保护指引**（「设置 → 服务内容声明 → 用户隐私保护指引」）：声明「选中的照片或视频信息」（`wx.chooseMedia`、`wx.chooseMessageFile`）、「相册（仅写入）权限」（`wx.saveImageToPhotosAlbum`）、「位置信息」（`wx.chooseLocation`），用途与帮助页的隐私说明保持一致，并写明照片的经纬度与搜索关键词会发送给 Mapbox。未声明的接口会调用失败（errno 112）；用户拒绝时（errno 104），页面会提示需要同意隐私保护指引。
-3. **接口权限**：如后台提示，在「开发管理 → 接口设置」中开通 `wx.chooseLocation`（地图选点）。
+2. **用户隐私保护指引**（「设置 → 服务内容声明 → 用户隐私保护指引」）：声明「选中的照片或视频信息」（`wx.chooseMedia`、`wx.chooseMessageFile`）、「相册（仅写入）权限」（`wx.saveImageToPhotosAlbum`）、「位置信息」（`wx.chooseLocation`）与「模糊位置信息」（`wx.getFuzzyLocation`），用途与帮助页的隐私说明保持一致，并写明照片的经纬度与搜索关键词会发送给 Mapbox。未声明的接口会调用失败（errno 112）；用户拒绝时（errno 104），页面会提示需要同意隐私保护指引。
+3. **接口权限**：在「开发管理 → 接口设置」中开通 `wx.chooseLocation`（地图选点）与 `wx.getFuzzyLocation`（模糊位置，已开通；`app.json` 已声明 `requiredPrivateInfos` 与 `scope.userFuzzyLocation` 用途说明，并在隐私保护指引补充「模糊位置信息」）。
 4. **客服**：在后台「客服」中绑定客服人员，帮助页的「联系客服」才有人接待；「意见反馈」的内容在后台「用户反馈」中查看。
 5. **云开发与虚拟支付**（开放购买时才需要；只发免费版见「先上线免费版」，云函数仍需部署并配置 `INVITE_CODES`）：按上文「开通与部署步骤」开通虚拟支付（含 iOS 的小程序简称与 Apple IAP）、创建并发布道具、部署云函数、配置环境变量、数据库权限与消息推送，并用最低价订单在 iOS 与 Android 体验版各完整走一遍（含退款）。
 6. **服务类目**与实际功能（图片制作、虚拟商品售卖）一致；如有用户协议或退款规则，补充到帮助页。
