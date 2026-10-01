@@ -21,6 +21,9 @@ const {
 const EXPORT_SCALE = 3;
 const { MAX_BATCH } = batchUtil;
 const FOOTER_KEY = 'geopics.footer';
+// 手动选过的地点：微信常去掉照片里的定位，下一张照片可以一键选用
+const RECENT_KEY = 'geopics.recentPlaces';
+const RECENT_MAX = 3;
 
 const posterHeight = (footer) => POSTER_H + (footer ? FOOTER_H : 0);
 const exportSizeText = (footer) => `${POSTER_W * EXPORT_SCALE} × ${Math.round(posterHeight(footer) * EXPORT_SCALE)}`;
@@ -40,6 +43,16 @@ const SHARE_H = 600;
 const SHARE_PAD = 44;
 
 const DEFAULT_CROP = { zoom: 1, x: 0, y: 0 };
+
+function loadRecentPlaces() {
+  try {
+    const list = wx.getStorageSync(RECENT_KEY);
+    if (!Array.isArray(list)) return [];
+    return list.filter((p) => p && p.name && typeof p.lat === 'number' && typeof p.lon === 'number').slice(0, RECENT_MAX);
+  } catch (e) {
+    return [];
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* 通用工具                                                             */
@@ -221,6 +234,7 @@ Page({
     this._renderId = 0;
     this._searchId = 0;
     this._geoCache = {};
+    this.recentPlaces = loadRecentPlaces();
     this._searchTimer = null;
     this._placeTimer = null;
     this._imgCache = new Map();
@@ -717,8 +731,8 @@ Page({
     if (batch && canAdd) actions.push(['继续添加照片', () => this.onAddPhotos()]);
     actions.push([replace, () => this.onChoosePhoto()]);
     if (!batch) actions.push(['批量导入（会员功能）', () => this.requireBatch(() => this.resumeAddPhotos())]);
-    if (batch && canAdd) actions.push(['从聊天添加原图', () => this.chooseAndImport(true, 'chat')]);
-    else actions.push(['从聊天选原图', () => this.chooseAndImport(false, 'chat')]);
+    if (batch && canAdd) actions.push(['从聊天记录添加', () => this.chooseAndImport(true, 'chat')]);
+    else actions.push(['从聊天记录选择', () => this.chooseAndImport(false, 'chat')]);
     let tapIndex;
     try {
       ({ tapIndex } = await wxp('showActionSheet', { itemList: actions.map((a) => a[0]) }));
@@ -726,11 +740,6 @@ Page({
       return;
     }
     await actions[tapIndex][1]();
-  },
-
-  // 从相册选图时微信常把定位信息去掉；聊天里以“文件”发送的原图则保持完整
-  onChooseFromChat() {
-    return this.chooseAndImport(false, 'chat');
   },
 
   // 购买会员后继续刚才想做的批量导入；买的若是单张（不含批量）则不再打扰
@@ -825,26 +834,30 @@ Page({
 
     const missing = created.filter((it) => it.lat === null);
     if (!missing.length) return;
-    if (created.length === 1) {
-      const modal = await wxp('showModal', {
-        title: '未读取到位置',
-        content:
-          source === 'chat'
-            ? '这张照片没有定位信息（拍摄时未开启定位，或已被编辑、截图），可以手动选择拍摄地点。'
-            : '这张照片没有读到定位信息。微信从相册选图时常会去掉位置，可把原图用「文件传输助手」以文件形式发给自己，再点预览下方的「从聊天选原图」导入；也可以先手动选择拍摄地点。',
-        confirmText: '去选择',
-        cancelText: '暂不',
-        confirmColor: TINT
-      }).catch(() => ({ confirm: false }));
-      if (modal.confirm) await this.onPickLocation();
-    } else {
-      wxp('showModal', {
-        title: '部分照片未读取到位置',
-        content: `有 ${missing.length} 张照片没有位置信息（缩略图上标有“无位置”），点选该照片后可手动选择位置。`,
-        showCancel: false,
-        confirmColor: TINT
-      }).catch(() => {});
+    await this.promptMissingLocation(created, missing);
+  },
+
+  // 微信出于隐私保护，选图时常会去掉照片里的定位（iOS 上几乎总是如此），读不到并不是照片或解析的问题。
+  // 直接引导选择一次地点；多张时选好后可一起用于其余无位置的照片
+  async promptMissingLocation(created, missing) {
+    const single = created.length === 1;
+    const all = missing.length === created.length;
+    const who = single ? '这张照片' : all ? `这 ${missing.length} 张照片` : `有 ${missing.length} 张照片（缩略图上标有“无位置”）`;
+    const modal = await wxp('showModal', {
+      title: single || all ? '未读取到位置' : '部分照片未读取到位置',
+      content: `${who}没有读到定位信息，微信出于隐私保护常会去掉照片里的位置。选择一次拍摄地点即可${missing.length > 1 ? '，并可同时用于其他照片' : ''}。`,
+      confirmText: '选择地点',
+      cancelText: '暂不',
+      confirmColor: TINT
+    }).catch(() => ({ confirm: false }));
+    if (!modal.confirm) return;
+    if (this.poster.lat !== null) {
+      this.poster = missing[0];
+      this.ensureCategory();
+      this.syncView();
+      this.render();
     }
+    await this.onPickLocation();
   },
 
   // 原图像素过大时，部分机型的 canvas 只能解码出上半部分，下半部分变成竖向拖影。
@@ -966,25 +979,30 @@ Page({
       wx.showToast({ title: '请先选择照片', icon: 'none' });
       return;
     }
+    const actions = this.recentPlaces.map((p) => [`最近：${p.name}`, () => this.applyManualLocation(p.lat, p.lon, p.name)]);
     // wx.chooseLocation 使用腾讯地图，海外无法定位；配置了 Mapbox 时提供全球搜索
-    if (!mapService.hasToken()) {
-      await this.pickWithWechatMap();
+    if (mapService.hasToken()) {
+      actions.push(['搜索地点（全球）', () => this.openSearch()]);
+      actions.push(['地图选点（微信地图，仅国内）', () => this.pickWithWechatMap()]);
+    } else {
+      actions.push(['地图选点（微信地图）', () => this.pickWithWechatMap()]);
+    }
+    if (actions.length === 1) {
+      await actions[0][1]();
       return;
     }
     let tapIndex;
     try {
-      ({ tapIndex } = await wxp('showActionSheet', {
-        itemList: ['搜索地点（全球）', '地图选点（微信地图，仅国内）']
-      }));
+      ({ tapIndex } = await wxp('showActionSheet', { itemList: actions.map((a) => a[0]) }));
     } catch (e) {
       return;
     }
-    if (tapIndex === 0) {
-      await this.coverPreview();
-      this.setData({ searchVisible: true, searchKeyword: '', searchResults: [], searching: false, searchEmpty: false });
-    } else {
-      await this.pickWithWechatMap();
-    }
+    await actions[tapIndex][1]();
+  },
+
+  async openSearch() {
+    await this.coverPreview();
+    this.setData({ searchVisible: true, searchKeyword: '', searchResults: [], searching: false, searchEmpty: false });
   },
 
   async pickWithWechatMap() {
@@ -1001,9 +1019,39 @@ Page({
 
     // chooseLocation 返回 GCJ-02，需转换为 WGS-84 才能与 Mapbox 对齐
     const wgs = mapService.gcj02ToWgs84(loc.latitude, loc.longitude);
+    await this.applyManualLocation(wgs.lat, wgs.lon, loc.name || '', loc.name || loc.address);
+  },
+
+  // 手动选定的地点：记入“最近”，并询问是否一起用于其余没有位置的照片（手动改过地名的除外）
+  async applyManualLocation(lat, lon, name, label) {
+    const target = this.poster;
+    this.rememberPlace(lat, lon, label || name);
     this.showBusy('生成海报…');
-    await this.applyLocation(this.poster, wgs.lat, wgs.lon, loc.name || '');
+    await this.applyLocation(target, lat, lon, name);
     this.hideBusy();
+    const rest = this.items.filter((it) => it !== target && it.lat === null && !it.placeManual);
+    if (!rest.length) return;
+    const modal = await wxp('showModal', {
+      title: '同时用于其他照片？',
+      content: `还有 ${rest.length} 张照片没有位置，可以一起使用这个地点，之后仍可逐张修改。`,
+      confirmText: '一起使用',
+      cancelText: '仅这张',
+      confirmColor: TINT
+    }).catch(() => ({ confirm: false }));
+    if (!modal.confirm) return;
+    await Promise.all(rest.map((it) => this.applyLocation(it, lat, lon, name)));
+    wx.showToast({ title: `已应用到 ${rest.length + 1} 张`, icon: 'none' });
+  },
+
+  rememberPlace(lat, lon, name) {
+    const label = (name || '').trim() || exifParser.formatCoordinates(lat, lon).text;
+    const same = (p) => p.name === label || (Math.abs(p.lat - lat) < 1e-3 && Math.abs(p.lon - lon) < 1e-3);
+    this.recentPlaces = [{ name: label, lat, lon }].concat(this.recentPlaces.filter((p) => !same(p))).slice(0, RECENT_MAX);
+    try {
+      wx.setStorageSync(RECENT_KEY, this.recentPlaces);
+    } catch (e) {
+      /* 保存失败只影响下次的“最近”列表 */
+    }
   },
 
   /* ---------------------------- 全球地点搜索 ---------------------------- */
@@ -1047,9 +1095,7 @@ Page({
     const hit = this.data.searchResults[e.currentTarget.dataset.index];
     if (!hit) return;
     this.onSearchClose();
-    this.showBusy('生成海报…');
-    await this.applyLocation(this.poster, hit.lat, hit.lon, hit.name);
-    this.hideBusy();
+    await this.applyManualLocation(hit.lat, hit.lon, hit.name);
   },
 
   /* ---------------------------- 地名：手动修改 / 语言切换 ---------------------------- */
