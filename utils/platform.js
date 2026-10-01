@@ -16,10 +16,18 @@ function platform() {
   }
 }
 
-// iOS 端只能通过虚拟支付（Apple 支付）售卖虚拟商品（会员 / 单张解锁），由 config.payment.iosPurchase 控制入口。
-// 开发者工具的 platform 为 devtools，不受影响，方便调试
+// 是否显示价格与购买入口。purchaseEnabled 是总开关（关闭时所有平台都只有免费额度与邀请码）；
+// iOS 只能通过虚拟支付（Apple 支付）售卖虚拟商品，另由 iosPurchase 控制。
+// 开发者工具的 platform 为 devtools，不受 iOS 开关影响，方便调试
 function canPurchase() {
+  if (config.payment.purchaseEnabled === false) return false;
   return platform() !== 'ios' || config.payment.iosPurchase === true;
+}
+
+// 付费面板里代替购买入口的说明
+function purchaseNote() {
+  if (canPurchase()) return '';
+  return config.payment.purchaseEnabled === false ? '会员购买暂未开放，目前可使用每月免费额度和邀请码' : '由于相关规范，iOS 暂不支持在小程序内购买';
 }
 
 function isSinglePageMode() {
@@ -54,4 +62,4 @@ function version() {
   }
 }
 
-module.exports = { SINGLE_PAGE_SCENE, platform, canPurchase, isSinglePageMode, envVersion, isDevBuild, version };
+module.exports = { SINGLE_PAGE_SCENE, platform, canPurchase, purchaseNote, isSinglePageMode, envVersion, isDevBuild, version };

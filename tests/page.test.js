@@ -24,7 +24,7 @@ mapService.reverseGeocode = async (lat) => {
 
 const ORIGINAL = JSON.parse(JSON.stringify({ payment: config.payment, membership: config.membership }));
 test.beforeEach(() => {
-  Object.assign(config.payment, JSON.parse(JSON.stringify(ORIGINAL.payment)), { mode: 'mock' });
+  Object.assign(config.payment, JSON.parse(JSON.stringify(ORIGINAL.payment)), { mode: 'mock', purchaseEnabled: true });
   Object.assign(config.membership, JSON.parse(JSON.stringify(ORIGINAL.membership)));
   mapService.hasToken = () => false;
 });
@@ -623,6 +623,36 @@ test('iOS：关闭购买入口（iosPurchase=false）时不展示价格，文案
   page.refreshEntitlement();
   assert.strictEqual(page.data.memberChip, '额度已用完');
   assert.strictEqual(page.data.memberLabel, '额度已用完');
+});
+
+test('购买总开关关闭（上线前默认）：所有平台只有免费额度与邀请码，没有价格与购买入口', async () => {
+  assert.strictEqual(ORIGINAL.payment.purchaseEnabled, false, '提交的配置默认不开放购买');
+  config.payment.purchaseEnabled = false;
+  config.membership.inviteCodes = ['geo0930'];
+  for (const name of ['android', 'ios', 'devtools']) {
+    const wx = createWx({ getDeviceInfo: () => ({ platform: name }) });
+    wx.store['geopics.membership'] = freeOut();
+    const page = createPage(wx);
+    page.onLoad();
+    assert.strictEqual(page.data.canPurchase, false, name);
+    assert.strictEqual(page.data.purchaseNote, '会员购买暂未开放，目前可使用每月免费额度和邀请码', name);
+    assert.ok(!/开通|购买|¥/.test(page.data.memberLabel + page.data.memberChip + page.data.stageNote), name);
+    await page.onBuy(tap({ kind: 'plan', id: 'month' }));
+    await page.onBuy(tap({ kind: 'single' }));
+    assert.ok(!wx.calls.modal.some((m) => m.title === '测试支付'), name);
+    assert.strictEqual(page.member.packs.length, 0);
+    page.onTapTemplate(tap({ id: 'arch' }));
+    await page.onOpenPaywall();
+    assert.ok(page.data.paywallVisible);
+    assert.ok(!/开通|购买|¥/.test(page.data.paywallNotice), page.data.paywallNotice);
+  }
+  global.wx = createWx({ getDeviceInfo: () => ({ platform: 'android' }) });
+  assert.strictEqual(platform.purchaseNote(), '会员购买暂未开放，目前可使用每月免费额度和邀请码');
+  config.payment.purchaseEnabled = true;
+  assert.strictEqual(platform.purchaseNote(), '');
+  config.payment.iosPurchase = false;
+  global.wx = createWx({ getDeviceInfo: () => ({ platform: 'ios' }) });
+  assert.strictEqual(platform.purchaseNote(), '由于相关规范，iOS 暂不支持在小程序内购买');
 });
 
 test('平台判断：iOS 购买入口由 iosPurchase 控制；接口异常时按普通环境处理', () => {

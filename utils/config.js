@@ -61,8 +61,12 @@ module.exports = {
     // 'cloud'：微信云开发。下单、入账、额度扣减、邀请码都在云函数 api 里完成，
     //          小程序端只保存服务端返回的权益快照。部署步骤见 README「接入微信支付」
     mode: 'cloud',
-    // iOS 端是否显示购买入口。云函数使用虚拟支付（PAY_CHANNEL 默认值 virtual）时，iOS 会走 Apple 支付，
-    // 合规，保持 true。虚拟支付尚未开通、或云函数改用 jsapi（云支付）时必须改为 false：
+    // 总开关：是否开放购买（会员 / 单张解锁）。false 时所有平台都不显示价格与购买入口，
+    // 只保留每月免费额度和邀请码兑换。虚拟支付尚未开通的上线版保持 false；
+    // 开通并在真机验证后改为 true
+    purchaseEnabled: false,
+    // iOS 端是否显示购买入口（仅在 purchaseEnabled 为 true 时有意义）。云函数使用虚拟支付（PAY_CHANNEL 默认值 virtual）时，iOS 会走 Apple 支付，
+    // 合规，保持 true。云函数改用 jsapi（云支付）时必须改为 false：
     // 此时 iOS 只展示已有权益、免费额度与邀请码兑换
     iosPurchase: true,
     // env：云开发环境 ID；api：云函数名
