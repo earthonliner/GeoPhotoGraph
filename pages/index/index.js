@@ -1047,18 +1047,24 @@ Page({
       wx.showToast({ title: '需同意隐私保护指引后才能获取位置', icon: 'none' });
       return;
     }
-    if (/auth deny|authorize no response|auth denied/i.test(msg)) {
-      const modal = await wxp('showModal', {
-        title: '需要位置权限',
-        content: '你之前没有允许获取位置。可以到设置里打开「位置信息」，或改用搜索 / 地图选点。',
-        confirmText: '去设置',
-        cancelText: '取消',
-        confirmColor: TINT
-      }).catch(() => ({ confirm: false }));
-      if (modal.confirm) wx.openSetting({ fail() {} });
-      return;
-    }
-    wx.showToast({ title: '无法获取当前位置，请确认手机已开启定位', icon: 'none' });
+    // 小程序未获授权，或微信 / 系统层面没有位置权限，或系统定位开关关闭：都可以到设置里处理
+    const settings = /auth deny|auth denied|authorize no response|permission denied|LOCATIONSWITCHOFF|location (service|switch)/i.test(msg);
+    const config = /requiredPrivateInfos|permission desc|not authorized|no permission|api scope/i.test(msg);
+    const content = settings
+      ? '没有获得位置权限。请确认：手机系统设置里允许微信使用位置、手机定位开关已打开，并在小程序设置里允许「位置信息」。也可以改用搜索 / 地图选点。'
+      : config
+        ? '当前版本暂时无法使用此功能，请改用搜索 / 地图选点。'
+        : '暂时无法获取当前位置，请稍后再试，或改用搜索 / 地图选点。';
+    const modal = await wxp('showModal', {
+      title: '无法获取当前位置',
+      // 把微信返回的原因一并显示，便于反馈和排查
+      content: msg ? `${content}\n\n错误信息：${msg}` : content,
+      confirmText: settings ? '去设置' : '知道了',
+      cancelText: '取消',
+      showCancel: settings,
+      confirmColor: TINT
+    }).catch(() => ({ confirm: false }));
+    if (settings && modal.confirm) wx.openSetting({ fail() {} });
   },
 
   // 手动选定的地点：记入“最近”，并询问是否一起用于其余没有位置的照片（手动改过地名的除外）

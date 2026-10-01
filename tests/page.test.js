@@ -1147,7 +1147,7 @@ test('使用当前所在城市：点按时获取一次模糊位置，作为地�
   assert.ok(multi.items.every((it) => it.place === 'KYOTO'));
 });
 
-test('使用当前所在城市：基础库不支持时不出现；被拒绝授权引导去设置；其他失败提示开启定位', async () => {
+test('使用当前所在城市：基础库不支持时不出现；失败时说明原因并引导去设置', async () => {
   const wx = createWx();
   wx.files = ['b.jpg'];
   wx.modalConfirm = false;
@@ -1163,22 +1163,43 @@ test('使用当前所在城市：基础库不支持时不出现；被拒绝授�
   wx.sheetTap = 0;
   wx.modalConfirm = true;
   await page.onPickLocation();
-  assert.strictEqual(wx.calls.modal.pop().title, '需要位置权限');
+  const denied = wx.calls.modal.pop();
+  assert.strictEqual(denied.title, '无法获取当前位置');
+  assert.ok(denied.content.includes('错误信息：getFuzzyLocation:fail auth deny'));
+  assert.strictEqual(denied.confirmText, '去设置');
   assert.strictEqual(wx.calls.openSetting, 1);
   wx.modalConfirm = false;
   await page.onPickLocation();
   assert.strictEqual(wx.calls.openSetting, 1, '选“取消”不跳转设置');
 
+  // 系统层面没有位置权限 / 定位开关关闭，同样引导去设置
+  for (const errMsg of ['getFuzzyLocation:fail system permission denied', 'getFuzzyLocation:fail:ERROR_NOCELL&WIFI_LOCATIONSWITCHOFF']) {
+    fuzzy(wx, { fail: { errMsg } });
+    await page.onPickLocation();
+    const m = wx.calls.modal.pop();
+    assert.strictEqual(m.confirmText, '去设置', errMsg);
+    assert.ok(m.content.includes(errMsg));
+  }
+
   fuzzy(wx, { fail: { errMsg: 'getFuzzyLocation:fail cancel' } });
   const toasts = wx.calls.toast.length;
+  const modals = wx.calls.modal.length;
   await page.onPickLocation();
   assert.strictEqual(wx.calls.toast.length, toasts, '取消不提示');
+  assert.strictEqual(wx.calls.modal.length, modals);
   fuzzy(wx, { fail: { errno: 104, errMsg: 'getFuzzyLocation:fail privacy permission is not authorized' } });
   await page.onPickLocation();
   assert.strictEqual(wx.calls.toast.pop(), '需同意隐私保护指引后才能获取位置');
-  fuzzy(wx, { fail: { errMsg: 'getFuzzyLocation:fail system permission denied' } });
+
+  // 其他原因：显示微信返回的错误信息，不再笼统地说“请开启定位”
+  fuzzy(wx, { fail: { errMsg: 'getFuzzyLocation:fail something unexpected' } });
   await page.onPickLocation();
-  assert.strictEqual(wx.calls.toast.pop(), '无法获取当前位置，请确认手机已开启定位');
+  const other = wx.calls.modal.pop();
+  assert.deepStrictEqual([other.confirmText, other.showCancel], ['知道了', false]);
+  assert.ok(other.content.includes('错误信息：getFuzzyLocation:fail something unexpected'));
+  fuzzy(wx, { fail: { errMsg: 'getFuzzyLocation:fail the api need to be declared in the requiredPrivateInfos field in app.json' } });
+  await page.onPickLocation();
+  assert.ok(wx.calls.modal.pop().content.startsWith('当前版本暂时无法使用此功能'));
   assert.strictEqual(page.poster.lat, null);
 });
 
