@@ -57,14 +57,7 @@
       <text wx:if="{{currentLocked && canPurchase}}" class="link stage-link" bindtap="onOpenPaywall">解锁无水印高清图</text>
     </view>
     <text wx:if="{{singlePage}}" class="stage-note">当前为朋友圈预览，点击下方「前往小程序」即可用自己的照片制作</text>
-    <view wx:elif="{{!hasPhoto}}" class="stage-note">
-      <text>选择带定位信息的原图，自动读取拍摄地点与日期。</text>
-      <text class="link stage-link" bindtap="onChooseFromChat">相册读不到位置？从聊天选原图</text>
-    </view>
-    <view wx:if="{{hasPhoto && !hasLocation && !singlePage}}" class="stage-note">
-      <text>这张照片没有位置信息。</text>
-      <text class="link stage-link" bindtap="onChooseFromChat">从聊天选原图</text>
-    </view>
+    <text wx:elif="{{!hasPhoto}}" class="stage-note">选择照片，自动读取拍摄日期与地点；读不到地点时，选择一次即可</text>
     <text wx:if="{{tokenMissing}}" class="stage-note stage-warn">开发提示：未配置 Mapbox Token（utils/config.local.js），当前使用本地简约底图，地名不可用</text>
   </view>
 
