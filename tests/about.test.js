@@ -6,9 +6,14 @@ const { createWx, createPage, tap } = require('./helpers/page-env');
 
 const MODE = config.payment.mode;
 const IOS_PURCHASE = config.payment.iosPurchase;
+const PURCHASE = config.payment.purchaseEnabled;
+test.beforeEach(() => {
+  config.payment.purchaseEnabled = true;
+});
 test.afterEach(() => {
   config.payment.mode = MODE;
   config.payment.iosPurchase = IOS_PURCHASE;
+  config.payment.purchaseEnabled = PURCHASE;
 });
 
 function load(overrides) {

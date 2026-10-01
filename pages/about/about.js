@@ -13,7 +13,7 @@ function steps() {
   ];
 }
 
-// canPurchase 为 false（iOS 且未开通购买）时不出现价格与购买引导；cloud 模式下权益在云端，换机不丢
+// canPurchase 为 false（购买未开放，或 iOS 未开通购买）时不出现价格与购买引导；cloud 模式下权益在云端，换机不丢
 function faqs(canPurchase, cloud, ios) {
   const { free, plans, lifetime, single } = config.membership;
   const list = [

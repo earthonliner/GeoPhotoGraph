@@ -30,7 +30,7 @@ const TINT = '#007AFF';
 const MAPBOX_LOGO = '/assets/mapbox-logo.png';
 // 回到页面时向服务端同步权益的最短间隔：选图、定位等系统界面返回也会触发 onShow
 const SYNC_INTERVAL = 30 * 1000;
-// 批量导入与批量下载只对月度、年度、买断会员和邀请码开放（iOS 不提供购买，文案里不带购买引导）
+// 批量导入与批量下载只对月度、年度、买断会员和邀请码开放（不提供购买的平台，文案里不带购买引导）
 const BATCH_NOTICE = '批量导入与批量下载只对月度、年度、买断会员和邀请码开放，单张解锁不含批量。';
 const BATCH_NOTICE_IOS = '批量导入与批量下载仅对会员开放，已有会员权益或邀请码的用户可以使用。';
 const SHARE_TITLE = 'GEOPICS · 把照片与它发生的地方，做成一张海报';
@@ -157,6 +157,7 @@ Page({
     packLines: [],
     mockPay: payment.isMock(),
     canPurchase: true,
+    purchaseNote: '',
     singlePage: false,
     categories: CATEGORIES,
     catId: HOT_CATEGORY,
@@ -244,6 +245,7 @@ Page({
           exportSize: exportSizeText(footerOn),
           canvasStyle: `width:${cssW}px;height:${cssH}px;`,
           canPurchase: this.canPurchase,
+          purchaseNote: platform.purchaseNote(),
           singlePage: this.singlePage,
           // 只提示开发者：正式版缺少 token 时静默使用本地底图
           tokenMissing: !mapService.hasToken() && platform.isDevBuild()
