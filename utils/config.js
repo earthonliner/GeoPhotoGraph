@@ -11,7 +11,15 @@
 // Mapbox Public Token（pk.…）。仓库是公开的，GitHub 会拦截含 token 的提交，
 // 所以真实 token 写在同目录的 config.local.js 里（本地文件，不要提交）。
 // 在 Mapbox 账号里为 token 设置 URL 限制，仅允许 https://servicewechat.com/ 开头的来源。
-const MAPBOX_TOKEN = require('./config.local').mapboxToken || '';
+// 文件缺失时不让整个小程序起不来，只是退回无 token 的本地底图。
+function readLocalToken() {
+  try {
+    return require('./config.local').mapboxToken || '';
+  } catch (e) {
+    return '';
+  }
+}
+const MAPBOX_TOKEN = readLocalToken();
 
 module.exports = {
   mapbox: {

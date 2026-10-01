@@ -469,3 +469,23 @@ test('place-name: formatPlace shows city only by default, region on demand', () 
   assert.strictEqual(pn.formatPlace({ city: '杭州市', district: '西湖区' }, 'city', 'en'), 'HANGZHOU');
   assert.strictEqual(pn.formatPlace({ city: '北京市', district: '朝阳区' }, 'detail', 'en'), 'CHAOYANG, BEIJING');
 });
+
+test('config：缺少 config.local.js 时不抛错，Mapbox token 为空', () => {
+  const path = require.resolve('../utils/config');
+  const local = require.resolve('../utils/config.local');
+  const saved = { config: require.cache[path], local: require.cache[local] };
+  const Module = require('module');
+  const load = Module._load;
+  delete require.cache[path];
+  Module._load = function (request, ...rest) {
+    if (request === './config.local') throw new Error("module 'utils/config.local.js' is not defined");
+    return load.call(this, request, ...rest);
+  };
+  try {
+    assert.strictEqual(require('../utils/config').mapbox.token, '');
+  } finally {
+    Module._load = load;
+    delete require.cache[path];
+    require.cache[path] = saved.config;
+  }
+});
