@@ -119,6 +119,8 @@
             placeholder-class="ph"
             confirm-type="done"
             bindinput="onPlaceInput"
+            bindblur="onPlaceCommit"
+            bindconfirm="onPlaceCommit"
           />
         </view>
         <picker mode="date" value="{{dateValue}}" start="1900-01-01" end="{{dateToday}}" bindchange="onDateChange">

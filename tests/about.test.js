@@ -46,7 +46,7 @@ test('帮助页：安卓正式版列出价格、云端权益、隐私说明与�
     '一次最多导入 9 张。批量导入和批量下载只对月度、年度、买断会员和邀请码开放，单张解锁不含批量。'
   );
   assert.ok(answer(page, '换手机后额度还在吗？').includes('云端'));
-  assert.deepStrictEqual(page.data.privacy.map((p) => p.title), ['照片只在手机上处理', '位置与地名', '会员与额度']);
+  assert.deepStrictEqual(page.data.privacy.map((p) => p.title), ['照片与内容安全', '位置与地名', '会员与额度']);
   assert.ok(page.data.privacy[1].text.includes('Mapbox'));
   assert.strictEqual(page.data.privacyContract, true);
   assert.ok(page.data.faqs.every((f) => !f.open));

@@ -12,7 +12,9 @@ function clone(v) {
 function createFakeCloud(options = {}) {
   let store = {};
   const ledger = options.ledger || {};
-  const calls = { unifiedOrder: [], queryOrder: [] };
+  const calls = { unifiedOrder: [], queryOrder: [], msgSecCheck: [], mediaCheckAsync: [], deleteFile: [] };
+  const files = options.files || {};
+  const sec = { msgSecCheck: options.msgSecCheck || null, mediaCheckAsync: options.mediaCheckAsync || null };
   const pay = {
     unifiedOrder: options.unifiedOrder || null,
     queryOrder: options.queryOrder || null
@@ -71,6 +73,28 @@ function createFakeCloud(options = {}) {
   const cloud = {
     DYNAMIC_CURRENT_ENV: 'env-test',
     getWXContext: () => ({ OPENID: openid }),
+    async getTempFileURL({ fileList }) {
+      return { fileList: fileList.map((id) => ({ fileID: id, tempFileURL: files[id] === undefined ? '' : `https://tmp.example/${encodeURIComponent(id)}` })) };
+    },
+    async deleteFile({ fileList }) {
+      calls.deleteFile.push(...fileList);
+      fileList.forEach((id) => delete files[id]);
+      return { fileList: fileList.map((id) => ({ fileID: id, status: 0 })) };
+    },
+    openapi: {
+      security: {
+        async msgSecCheck(params) {
+          calls.msgSecCheck.push(params);
+          if (sec.msgSecCheck) return sec.msgSecCheck(params);
+          return { errCode: 0, errMsg: 'ok', result: { suggest: 'pass', label: 100 } };
+        },
+        async mediaCheckAsync(params) {
+          calls.mediaCheckAsync.push(params);
+          if (sec.mediaCheckAsync) return sec.mediaCheckAsync(params);
+          return { errCode: 0, errMsg: 'ok', traceId: `trace-${calls.mediaCheckAsync.length}` };
+        }
+      }
+    },
     database() {
       const main = api(() => store, () => {});
       return Object.assign(main, {
@@ -114,6 +138,9 @@ function createFakeCloud(options = {}) {
     cloud,
     calls,
     ledger,
+    files,
+    setMsgSecCheck: (fn) => { sec.msgSecCheck = fn; },
+    setMediaCheckAsync: (fn) => { sec.mediaCheckAsync = fn; },
     setOpenid: (id) => { openid = id; },
     setQueryOrder: (fn) => { pay.queryOrder = fn; },
     setUnifiedOrder: (fn) => { pay.unifiedOrder = fn; },

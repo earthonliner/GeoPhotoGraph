@@ -125,7 +125,7 @@
 
 ### 先上线免费版（购买暂未开放）
 
-虚拟支付还没开通时可以先发布：保持 `purchaseEnabled: false`、`payment.mode = 'cloud'`，部署云函数 `api` 并只配置 `INVITE_CODES`（不需要 `XPAY_*` 与 `WX_*` 变量），建好 `users`、`orders` 两个集合。免费额度和邀请码都由云函数记录。之后开通虚拟支付，按下文步骤配置变量与道具，再把 `purchaseEnabled` 改为 `true` 发新版本即可。
+虚拟支付还没开通时可以先发布：保持 `purchaseEnabled: false`、`payment.mode = 'cloud'`，部署云函数 `api` 并只配置 `INVITE_CODES`（不需要 `XPAY_*` 与 `WX_*` 变量），建好 `users`、`orders`、`seccheck` 三个集合，并添加 `wxa_media_check` 消息推送（内容安全，见「内容安全」一节）。免费额度和邀请码都由云函数记录。之后开通虚拟支付，按下文步骤配置变量与道具，再把 `purchaseEnabled` 改为 `true` 发新版本即可。
 
 ### 接入支付（小程序虚拟支付，含 iOS）
 
@@ -163,7 +163,7 @@
    - `WX_APPID`、`WX_APPSECRET`：小程序 AppID 与 AppSecret，用于 `code2Session` 换 `session_key` 和获取 `access_token`（查单）
    - `INVITE_CODES`：邀请码，多个用英文逗号分隔（如 `geo0930`）
    - `PAY_CHANNEL`：可不填，默认 `virtual`；填 `jsapi` 则改用旧的云支付（需 `SUB_MCH_ID` 等，且不含 iOS，此时务必把 `payment.iosPurchase` 改为 `false`）
-7. **消息推送**：开发者工具「云开发 → 设置 → 其他设置 → 消息推送」，推送模式选「云函数」，点「添加消息推送配置」**添加两条**：消息类型 `event`，事件类型分别为 `xpay_goods_deliver_notify`（发货）和 `xpay_refund_notify`（退款），环境选当前云环境，云函数选 `api`。同一个「消息类型 + 事件类型」只能推到一个环境的一个云函数；配置后该事件不再推送到小程序后台「开发管理 → 消息推送」里配置的服务器。
+7. **消息推送**：开发者工具「云开发 → 设置 → 其他设置 → 消息推送」，推送模式选「云函数」，点「添加消息推送配置」，消息类型 `event`，事件类型依次添加 `wxa_media_check`（图片内容安全检测结果，**所有版本都需要**）；开放购买时再加 `xpay_goods_deliver_notify`（发货）和 `xpay_refund_notify`（退款）。环境选当前云环境，云函数选 `api`。同一个「消息类型 + 事件类型」只能推到一个环境的一个云函数；配置后该事件不再推送到小程序后台「开发管理 → 消息推送」里配置的服务器。
 8. **切换模式**：`utils/config.js` 里 `payment.mode` 为 `'cloud'`，`membership.inviteCodes` 清空（cloud 模式不再读它）。
 9. **测试**：虚拟支付的现网支付是真实扣款。先把 `catalog.js` 与 `utils/config.js` 里的价格和道具价格一起临时改成最低价，用体验版 + 体验成员在 **iOS 和 Android 各走一遍**：下单 → 支付 → 确认订单变为 `paid`、`users` 里额度正确、重复推送不会重复加额度；再在后台退款，确认额度被收回。改回正式价格、重新发布道具后再提审。
 
@@ -182,13 +182,22 @@
 - **转发给好友**：标题为「「地名」· 用 GEOPICS 做的地图海报」（没有照片或地名未知时使用通用标题；地名默认跟随「地点」输入框，包括手动输入的内容）。转发卡片按 5:4 显示，直接用 3:4 的海报会被裁掉上下，因此会把当前预览居中放到 5:4 的浅灰底图上作为卡片图；3 秒内没生成完、导出中或生成失败时使用微信默认截图。
 - **分享到朋友圈**：从朋友圈打开时是「单页模式」，不能选图、登录、调用云开发或支付。此时首页只展示示例海报与提示「点击下方「前往小程序」」，隐藏工具栏、会员胶囊和帮助入口，也不初始化云开发。
 
+## 内容安全
+
+用户可发布的内容有两类：导入的照片（会出现在海报里，并可保存、转发）和手动输入的地名（出现在海报与转发标题里）。两者都经云函数 `api` 调用微信内容安全接口（`cloudfunctions/api/security.js`，小程序端 `utils/security.js`），仅 `payment.mode = 'cloud'` 且 `security.enabled` 时生效。违规时页面只提示“内容含违规信息”。
+
+- **文本**：`security.msgSecCheck`（2.0，scene 4）。在地名输入框失焦 / 确认时检测，保存与转发前再检查一次；违规的地名恢复为自动地名，不会出现在海报、转发标题和转发图里。同一段文本只检测一次。
+- **图片**：`security.mediaCheckAsync`（2.0，异步）。导入后把长边 720px 的副本传到云存储 `seccheck/`，云函数换取临时链接提交检测，微信把结果以 `wxa_media_check` 事件推送回云函数，云函数记入集合 `seccheck` 并立即删除副本；小程序轮询 `imageResult`。导入时最多等 `security.importWaitMs`，违规的照片被移除并提示；还没出结果的照片先保留，后台继续等，保存前最多再等 `security.saveWaitMs`。一天仍无结果的副本在之后的调用里清理。
+- 检测服务本身出错（频率限制、网络等）时放行，不会让所有用户用不了；只有微信返回 `suggest = risky` 才算违规。
+- 部署：云函数目录下的 `config.json` 已声明 `security.msgSecCheck` 与 `security.mediaCheckAsync` 权限（上传云函数后约 10 分钟生效）；新建集合 `seccheck`（权限「仅云函数可读写」）；云存储保持默认权限；在「消息推送」里添加 `wxa_media_check`（见下文）。接口返回的结果不能代替人工巡查，仍需定期自查自清。
+
 ## 帮助与关于
 
 首页大标题旁的「?」进入 `pages/about/about`：
 
 - 使用方法（选择照片 → 挑选模板 → 调整细节 → 保存海报）。
 - 常见问题：读取不到拍摄地点、修改地名、地图没加载、保存到相册失败、免费额度、批量导入和批量下载；另有「会员怎么收费」（价格从 `config.membership` 读取，iOS 不显示）与「换手机后额度还在吗」（仅 cloud 模式）。
-- 隐私说明：照片只在手机上处理；经纬度与搜索关键词会发送给 Mapbox；地图选点使用微信位置服务；cloud 模式下额度与订单保存在云端、只与微信账号标识关联。基础库支持时显示《隐私保护指引》入口（`wx.openPrivacyContract`）。
+- 隐私说明：照片在手机上处理（cloud 模式下导入时会把缩小副本临时上传云存储做内容安全检测，检测后立即删除）；经纬度与搜索关键词会发送给 Mapbox；地图选点使用微信位置服务；cloud 模式下额度与订单保存在云端、只与微信账号标识关联。基础库支持时显示《隐私保护指引》入口（`wx.openPrivacyContract`）。
 - 联系客服（`open-type="contact"`）、意见反馈（`open-type="feedback"`）、地图数据署名与版本号（正式版显示版本号，开发版 / 体验版显示版本类型）。
 
 ## 品牌底栏与水印
@@ -231,6 +240,7 @@ node --test tests/*.test.js
 ```
 
 - `utils.test.js`：EXIF、静态图 URL、地名规范化、会员规则等工具函数。
+- `security.test.js`：云函数的内容安全（文本 / 图片提交 / 推送结果 / 清理）；首页的内容安全流程在 `page.test.js`。
 - `cloud.test.js`：用内存版的云开发 SDK（`helpers/fake-cloud.js`）跑完整的下单 → 回调 → 入账 → 扣额度 → 邀请码流程（云支付通道，`PAY_CHANNEL=jsapi`），并让小程序端 `payment.js` 直接调用云函数；校验两处价格配置一致，伪造的支付通知不会入账。
 - `xpay.test.js`：虚拟支付通道。用 `helpers/fake-xpay.js`（`code2Session`、`stable_token`、`query_order` 的替身，签名算法独立实现）校验下单签名、道具 ID 与价格、openid 核对、发货推送先查单再入账且幂等、伪造 / 金额不符 / 沙箱推送不入账、`access_token` 缓存与过期重试、退款收回权益，以及小程序端的 iOS 微信版本检查、取消、失败与“确认中”。
 - `poster.test.js`：用严格的假 Canvas 跑遍所有模板与极端输入（长名、空名、中文名、无日期、无位置、离线地图、透明度 0、水印与底栏），检查 NaN 坐标、非法字体串、save / restore 成对、残留 undefined 文本，以及署名规则、护照机读区校验位与地图集比例尺。
