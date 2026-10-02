@@ -92,13 +92,121 @@
   background: #1c1c1e;
 }
 
-/* 预览上方的模板栏：分类分段控件 + 模板标签 */
-.tpl-bar {
-  margin-bottom: 32rpx;
+/* 编辑态：页面固定一屏不滚动，预览在上，编辑面板占满剩余高度并在面板内滚动。
+   这里的尺寸与 index.js 的 PREVIEW_RESERVED_RPX 对应 */
+.page-edit {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: calc(156rpx + constant(safe-area-inset-bottom));
+  padding-bottom: calc(156rpx + env(safe-area-inset-bottom));
 }
 
-.tpl-bar .seg {
-  margin-bottom: 20rpx;
+.page-edit .header {
+  flex-shrink: 0;
+  padding: 8rpx 0 16rpx;
+}
+
+.page-edit .brand-logo {
+  width: 44rpx;
+  height: 44rpx;
+  margin-right: 12rpx;
+}
+
+.page-edit .large-title {
+  font-size: 40rpx;
+  line-height: 56rpx;
+  letter-spacing: 2rpx;
+}
+
+.page-edit .stage {
+  flex-shrink: 0;
+}
+
+.page-edit .stage-note {
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  line-height: 32rpx;
+}
+
+.page-edit .stage-link {
+  font-size: 22rpx;
+}
+
+.editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-top: 20rpx;
+}
+
+/* 分页标签：文字 + 下划线，发丝线贯穿屏宽 */
+.tabs {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  height: 72rpx;
+}
+
+.tabs::after {
+  content: '';
+  position: absolute;
+  left: -32rpx;
+  right: -32rpx;
+  bottom: 0;
+  height: 1px;
+  background: rgba(60, 60, 67, 0.29);
+  transform: scaleY(0.5);
+  transform-origin: 0 100%;
+}
+
+.tab {
+  position: relative;
+  flex: 1;
+  height: 72rpx;
+  line-height: 72rpx;
+  text-align: center;
+  font-size: 28rpx;
+  color: #8e8e93;
+  white-space: nowrap;
+}
+
+.tab-on {
+  font-weight: 600;
+  color: #1c1c1e;
+}
+
+.tab-on::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  bottom: 0;
+  width: 40rpx;
+  height: 5rpx;
+  margin-left: -20rpx;
+  border-radius: 3rpx;
+  background: #1c1c1e;
+}
+
+.panel {
+  flex: 1;
+  height: 0;
+}
+
+.panel-page {
+  padding: 24rpx 32rpx 8rpx;
+}
+
+.panel-page .seg + .chips {
+  margin-top: 20rpx;
+}
+
+.panel-head {
+  padding-top: 0;
 }
 
 /* 预览 */

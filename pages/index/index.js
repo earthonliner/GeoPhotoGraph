@@ -107,18 +107,37 @@ function cachedImage(canvas, cache, src) {
 /* Page                                                                 */
 /* ------------------------------------------------------------------ */
 
-// 预览最宽与页面内容同宽，但有照片时带底栏的整张海报须在首屏完整露出。预留高度对应 wxss 中
-// 大标题 118 + 模板栏 180 + 预览说明 60 + 底部工具栏 140 + 间距 32（rpx），改版式时需同步。
+// 编辑页不滚动：预览固定在上方，下方是分页的编辑面板，调整任何选项时整张海报都在视野内。
+// 预留高度对应 wxss 中编辑态的紧凑标题 80 + 两行预览说明 76 + 面板上间距 20 + 分页标签 72
+// + 页面底部留白 156（rpx，底部工具栏 140 + 间距），面板至少保留 panelRpx 的高度；改版式时需同步。
 // 宽度按带底栏的高度计算且保持不变，开关底栏只改变预览高度
-const PREVIEW_RESERVED_RPX = 118 + 180 + 60 + 140 + 32;
+const PREVIEW_RESERVED_RPX = 80 + 76 + 20 + 72 + 156;
+function panelRpx(win) {
+  return (win.windowHeight * 750) / win.windowWidth < 1300 ? 260 : 300;
+}
 function previewWidth(win) {
   const rpx = win.windowWidth / 750;
   const full = Math.min(win.windowWidth - 64 * rpx, 440);
   if (!win.windowHeight) return Math.floor(full);
   const safeBottom = win.safeArea && win.screenHeight ? Math.max(0, win.screenHeight - win.safeArea.bottom) : 0;
-  const fitH = win.windowHeight - PREVIEW_RESERVED_RPX * rpx - safeBottom;
+  const fitH = win.windowHeight - (PREVIEW_RESERVED_RPX + panelRpx(win)) * rpx - safeBottom;
   const fitW = (fitH * POSTER_W) / posterHeight(true);
-  return Math.floor(Math.max(Math.min(full, fitW), full * 0.64));
+  return Math.floor(Math.max(Math.min(full, fitW), full * 0.5));
+}
+
+// 编辑面板的分页；取景只对有照片取景区的模板出现
+const PANELS = [
+  { id: 'template', name: '模板' },
+  { id: 'photos', name: '照片' },
+  { id: 'place', name: '地点' },
+  { id: 'crop', name: '取景' },
+  { id: 'map', name: '地图' },
+  { id: 'opacity', name: '透明度' },
+  { id: 'poster', name: '海报' }
+];
+function panelView(cropEnabled, current) {
+  const panels = PANELS.filter((x) => cropEnabled || x.id !== 'crop');
+  return { panels, panel: panels.some((x) => x.id === current) ? current : 'template' };
 }
 
 // 随机模板：在当前分类内洗牌发牌，用完一轮再开始下一轮
@@ -211,6 +230,8 @@ Page({
     padCursor: '',
     hueCursor: '',
     cropEnabled: false,
+    panels: panelView(false).panels,
+    panel: 'template',
     cropZoom: 100,
     cropX: 0,
     cropY: 0,
@@ -698,6 +719,7 @@ Page({
           cropX: Math.round(crop.x * 100),
           cropY: Math.round(crop.y * 100)
         },
+        panelView(!!CROP_REGIONS[p.templateId], this.data.panel),
         this.listView(),
         extra
       )
@@ -1048,6 +1070,12 @@ Page({
     this.setData({ catId: tpl.category, visibleTemplates: templateTabs(tpl.category) });
   },
 
+  onTapPanel(e) {
+    const id = e.currentTarget.dataset.id;
+    if (id === this.data.panel || !this.data.panels.some((x) => x.id === id)) return;
+    this.setData({ panel: id });
+  },
+
   onTapCategory(e) {
     const catId = e.currentTarget.dataset.id;
     if (catId === this.data.catId) return;
@@ -1389,12 +1417,17 @@ Page({
   syncCropData() {
     const tplId = this.poster.templateId;
     const crop = this.getCrop(tplId);
-    this.setData({
-      cropEnabled: !!CROP_REGIONS[tplId],
-      cropZoom: Math.round(crop.zoom * 100),
-      cropX: Math.round(crop.x * 100),
-      cropY: Math.round(crop.y * 100)
-    });
+    this.setData(
+      Object.assign(
+        {
+          cropEnabled: !!CROP_REGIONS[tplId],
+          cropZoom: Math.round(crop.zoom * 100),
+          cropX: Math.round(crop.x * 100),
+          cropY: Math.round(crop.y * 100)
+        },
+        panelView(!!CROP_REGIONS[tplId], this.data.panel)
+      )
+    );
   },
 
   onCropSlider(e) {
