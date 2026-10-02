@@ -265,10 +265,10 @@ test('membership: catalogue, prices and formatting', () => {
   const { plans, single, lifetime, free } = config.membership;
   const month = plans.find((p) => p.id === 'month');
   const year = plans.find((p) => p.id === 'year');
-  assert.deepStrictEqual([single.price, month.price, year.price, lifetime.price], [129, 1490, 10990, 29900]);
-  assert.deepStrictEqual([month.quota, year.quota, lifetime.monthly], [120, 2000, 120]);
+  assert.deepStrictEqual([single.price, month.price, year.price, lifetime.price], [990, 1290, 4990, 9900]);
+  assert.deepStrictEqual([single.quota, month.quota, year.quota, lifetime.monthly], [10, 60, 500, 100]);
   assert.deepStrictEqual(free, { templates: ['polaroid'], monthly: 10 });
-  assert.deepStrictEqual([m.formatPrice(129), m.formatPrice(1490), m.formatPrice(10990), m.formatPrice(1900)], ['¥1.29', '¥14.9', '¥109.9', '¥19']);
+  assert.deepStrictEqual([m.formatPrice(129), m.formatPrice(990), m.formatPrice(1290), m.formatPrice(4990), m.formatPrice(9900)], ['¥1.29', '¥9.9', '¥12.9', '¥49.9', '¥99']);
   const { TEMPLATES } = require('../utils/poster/registry');
   free.templates.forEach((id) => assert.ok(TEMPLATES.some((t) => t.id === id), `free template ${id} exists`));
 });
@@ -322,20 +322,20 @@ test('membership: quota packs stack, expire and are spent earliest-first', () =>
   const none = m.normalize({});
 
   const s1 = m.addPack(none, month, now);
-  assert.strictEqual(m.packsRemaining(s1, now), 120);
+  assert.strictEqual(m.packsRemaining(s1, now), 60);
   assert.ok(m.isMember(s1, now) && m.batchAllowed(s1, now));
-  assert.strictEqual(m.label(s1, now), '会员 · 剩余 120 张');
-  assert.strictEqual(m.availableQuota(s1, OTHER, now), 120, 'paid quota works for every template');
-  assert.strictEqual(m.availableQuota(s1, POLAROID, now), 130, 'polaroid also has the monthly free quota');
-  assert.strictEqual(m.packsRemaining(s1, now + 29 * m.DAY), 120);
+  assert.strictEqual(m.label(s1, now), '会员 · 剩余 60 张');
+  assert.strictEqual(m.availableQuota(s1, OTHER, now), 60, 'paid quota works for every template');
+  assert.strictEqual(m.availableQuota(s1, POLAROID, now), 70, 'polaroid also has the monthly free quota');
+  assert.strictEqual(m.packsRemaining(s1, now + 29 * m.DAY), 60);
   assert.strictEqual(m.packsRemaining(s1, now + 31 * m.DAY), 0);
   assert.ok(!m.isMember(s1, now + 31 * m.DAY), 'expired pack is no longer a membership');
   assert.strictEqual(m.label(s1, now + 31 * m.DAY), '会员已到期 · 续购');
 
   const s2 = m.consume(s1, Array(20).fill(OTHER), now);
-  assert.strictEqual(m.packsRemaining(s2, now), 100);
+  assert.strictEqual(m.packsRemaining(s2, now), 40);
   assert.strictEqual(s1.packs[0].used, 0, 'consume does not mutate');
-  const s3 = m.consume(s2, Array(100).fill(OTHER), now);
+  const s3 = m.consume(s2, Array(40).fill(OTHER), now);
   assert.strictEqual(m.packsRemaining(s3, now), 0);
   assert.ok(m.isMember(s3, now), 'a used-up pack is still a membership until it expires');
   assert.strictEqual(m.label(s3, now), '额度已用完 · 续购');
@@ -343,14 +343,14 @@ test('membership: quota packs stack, expire and are spent earliest-first', () =>
 
   const s4 = m.addPack(m.addPack(s2, year, now + 5 * m.DAY), month, now + 10 * m.DAY);
   const t10 = now + 10 * m.DAY;
-  assert.strictEqual(m.packsRemaining(s4, t10), 100 + 2000 + 120);
-  const s5 = m.consume(s4, Array(110).fill(OTHER), t10);
+  assert.strictEqual(m.packsRemaining(s4, t10), 40 + 500 + 60);
+  const s5 = m.consume(s4, Array(50).fill(OTHER), t10);
   const byPlan = (st, id, i) => st.packs.filter((p) => p.planId === id)[i || 0];
-  assert.strictEqual(byPlan(s5, 'month', 0).used, 120, 'earliest expiring pack is used first');
+  assert.strictEqual(byPlan(s5, 'month', 0).used, 60, 'earliest expiring pack is used first');
   assert.strictEqual(byPlan(s5, 'year').used, 0);
   assert.strictEqual(byPlan(s5, 'month', 1).used, 10);
   assert.strictEqual(m.addPack(s1, year, now + 40 * m.DAY).packs.length, 1, 'expired packs are dropped on the next purchase');
-  assert.ok(m.packLines(s2, plans, now)[0].startsWith('月度会员 剩余 100/120 张'));
+  assert.ok(m.packLines(s2, plans, now)[0].startsWith('月度会员 剩余 40/60 张'));
 });
 
 test('membership: lifetime plan has a monthly limit that resets each month', () => {
@@ -363,14 +363,14 @@ test('membership: lifetime plan has a monthly limit that resets each month', () 
   assert.ok(m.hasLifetime(s1) && s1.bought);
   assert.ok(m.isMember(s1, now + 3650 * m.DAY), 'never expires');
   assert.ok(m.batchAllowed(s1, now + 3650 * m.DAY));
-  assert.strictEqual(m.lifetimeRemaining(s1, now), 120);
-  assert.strictEqual(m.label(s1, now), '会员 · 剩余 120 张');
-  assert.strictEqual(m.chipLabel(s1, now), '会员 · 120 张');
+  assert.strictEqual(m.lifetimeRemaining(s1, now), 100);
+  assert.strictEqual(m.label(s1, now), '会员 · 剩余 100 张');
+  assert.strictEqual(m.chipLabel(s1, now), '会员 · 100 张');
   assert.deepStrictEqual(m.addLifetime(s1, lifetime, now + 40 * m.DAY).lifetime, s1.lifetime, 'buying twice keeps the original record');
 
-  const used = m.consume(s1, Array(118).fill(OTHER), now);
+  const used = m.consume(s1, Array(98).fill(OTHER), now);
   assert.strictEqual(m.lifetimeRemaining(used, now), 2);
-  assert.ok(m.packLines(used, [], now)[0].startsWith('买断会员 本月剩余 2/120 张'));
+  assert.ok(m.packLines(used, [], now)[0].startsWith('买断会员 本月剩余 2/100 张'));
   const out = m.consume(used, Array(2).fill(OTHER), now);
   assert.strictEqual(m.lifetimeRemaining(out, now), 0);
   assert.strictEqual(m.paidRemaining(out, now), 0);
@@ -380,9 +380,9 @@ test('membership: lifetime plan has a monthly limit that resets each month', () 
   assert.strictEqual(m.availableQuota(out, POLAROID, now), 10, 'free polaroid quota still applies');
 
   const nextMonth = Date.UTC(2026, 9, 1, 1);
-  assert.strictEqual(m.lifetimeRemaining(out, nextMonth), 120, 'resets on the 1st, not carried over');
+  assert.strictEqual(m.lifetimeRemaining(out, nextMonth), 100, 'resets on the 1st, not carried over');
   const again = m.consume(out, [OTHER], nextMonth);
-  assert.strictEqual(m.lifetimeRemaining(again, nextMonth), 119);
+  assert.strictEqual(m.lifetimeRemaining(again, nextMonth), 99);
   assert.strictEqual(again.lifetime.month, '2026-10');
 });
 
@@ -392,25 +392,25 @@ test('membership: spending order is free, lifetime month, earliest pack, then si
   const month = plans.find((p) => p.id === 'month');
   const now = Date.UTC(2026, 8, 30, 10);
   let st = m.addSingle(m.addPack(m.addLifetime(m.normalize({}), lifetime, now), month, now));
-  assert.strictEqual(m.singlesRemaining(st), 1);
-  assert.strictEqual(m.paidRemaining(st, now), 120 + 120 + 1);
+  assert.strictEqual(m.singlesRemaining(st), 10);
+  assert.strictEqual(m.paidRemaining(st, now), 100 + 60 + 10);
 
-  const tpls = [POLAROID, POLAROID, OTHER].concat(Array(120).fill(OTHER));
+  const tpls = [POLAROID, POLAROID, OTHER].concat(Array(100).fill(OTHER));
   st = m.consume(st, tpls, now);
   assert.strictEqual(st.freeUsed, 2);
   assert.strictEqual(m.lifetimeRemaining(st, now), 0, 'the monthly lifetime quota is spent before packs');
-  assert.strictEqual(st.packs[0].used, 121 - 120, 'overflow goes to the pack');
-  assert.strictEqual(m.singlesRemaining(st), 1, 'single quota is kept for last');
+  assert.strictEqual(st.packs[0].used, 101 - 100, 'overflow goes to the pack');
+  assert.strictEqual(m.singlesRemaining(st), 10, 'poster pack is kept for last');
 
-  // 单张额度可用于任何模板，用后清零
+  // 海报包可用于任何模板，每张消耗 1 张
   const single = m.consume(m.addSingle(m.normalize({})), [OTHER], now);
-  assert.strictEqual(m.singlesRemaining(single), 0);
-  // 只买单张不含批量
+  assert.strictEqual(m.singlesRemaining(single), 9);
+  // 只买海报包不含批量
   const onlySingle = m.addSingle(m.normalize({}));
   assert.ok(!m.isMember(onlySingle, now) && !m.batchAllowed(onlySingle, now));
-  assert.strictEqual(m.availableQuota(onlySingle, OTHER, now), 1);
-  assert.strictEqual(m.chipLabel(onlySingle, now), '剩余 1 张');
-  assert.strictEqual(m.label(onlySingle, now, false), '剩余 1 张');
+  assert.strictEqual(m.availableQuota(onlySingle, OTHER, now), 10);
+  assert.strictEqual(m.chipLabel(onlySingle, now), '剩余 10 张');
+  assert.strictEqual(m.label(onlySingle, now, false), '剩余 10 张');
 });
 
 test('membership: state persists through storage and ignores garbage', () => {

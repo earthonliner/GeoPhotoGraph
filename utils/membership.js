@@ -2,10 +2,10 @@
  * 会员与额度。规则：
  * - 免费版：只有 config.membership.free.templates 中的模板（拍立得）每月有 free.monthly 张免费额度，
  *   按自然月（北京时间）计算，次月 1 日重置；其余模板预览带水印、不能下载，付费后才去水印并可下载。
- * - 付费额度三种：额度包（月度 / 年度，有效期内共 quota 张）、买断（永久有效，每自然月 monthly 张，不累计）、
- *   单张额度（一次性，长期有效）。邀请码会员不限量。
- * - 批量导入与批量下载只对会员开放：邀请码、买断、有效期内的月度 / 年度。只买单张不含批量。
- * - 保存一张无水印海报消耗 1 张，顺序：免费额度（仅免费模板）→ 买断当月额度 → 额度包（最早到期的先扣）→ 单张额度。
+ * - 付费额度三种：额度包（月度 / 年度，有效期内共 quota 张）、买断（长期有效，每自然月最多 monthly 张，不累计）、
+ *   海报包（一次性 single.quota 张，长期有效，存在 singles 里）。邀请码会员不限量。
+ * - 批量导入与批量下载只对会员开放：邀请码、买断、有效期内的月度 / 年度。只买海报包不含批量。
+ * - 保存一张无水印海报消耗 1 张，顺序：免费额度（仅免费模板）→ 买断当月额度 → 额度包（最早到期的先扣）→ 海报包。
  * - 计费粒度是“一张照片 + 一个模板”：同一张照片同一模板再次保存不重复计费，换模板再保存则重新计费。
  *
  * 注意：本地缓存与客户端校验只能防君子。正式收费请在服务端保存权益并校验（cloud 模式），
@@ -134,12 +134,12 @@ function lifetimeRemaining(state, now) {
   return Math.max(0, l.quota - used);
 }
 
-// 已购买、尚未使用的单张额度
+// 已购买、尚未使用的海报包张数
 function singlesRemaining(state) {
   return cleanCount(state.singles);
 }
 
-// 付费额度（买断当月 + 额度包 + 单张），与模板无关；邀请码不限量
+// 付费额度（买断当月 + 额度包 + 海报包），与模板无关；邀请码不限量
 function paidRemaining(state, now) {
   if (state.invite) return Infinity;
   return lifetimeRemaining(state, now) + packsRemaining(state, now) + singlesRemaining(state);
@@ -151,7 +151,7 @@ function isMember(state, now) {
   return !!state.invite || hasLifetime(state) || state.packs.some((p) => p.until > t);
 }
 
-// 批量导入与批量下载只对会员开放，只买单张不含批量
+// 批量导入与批量下载只对会员开放，只买海报包不含批量
 function batchAllowed(state, now) {
   return isMember(state, now);
 }
@@ -180,10 +180,10 @@ function addLifetime(state, plan, now) {
 }
 
 function addSingle(state) {
-  return clone(state, { singles: singlesRemaining(state) + 1 });
+  return clone(state, { singles: singlesRemaining(state) + cleanCount(config.membership.single.quota) });
 }
 
-// 消耗：tplIds 里每个模板 id 对应一张。先用免费额度（仅免费模板），再依次扣买断当月、最早到期的包、单张额度。
+// 消耗：tplIds 里每个模板 id 对应一张。先用免费额度（仅免费模板），再依次扣买断当月、最早到期的包、海报包。
 // 调用方须先确认额度足够
 function consume(state, tplIds, now) {
   if (state.invite) return state;
@@ -282,7 +282,7 @@ function packLines(state, plans, now) {
   return lines;
 }
 
-// 分 -> 元，去掉多余的 0：1490 -> ¥14.9，10990 -> ¥109.9，129 -> ¥1.29，1900 -> ¥19
+// 分 -> 元，去掉多余的 0：1290 -> ¥12.9，4990 -> ¥49.9，129 -> ¥1.29，9900 -> ¥99
 function formatPrice(cents) {
   return `¥${+(cents / 100).toFixed(2)}`;
 }

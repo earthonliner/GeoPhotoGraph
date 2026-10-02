@@ -174,7 +174,20 @@ function createHandler(deps) {
 
     const orderId = `GP${now().toString(36).toUpperCase()}${randomText(8, '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ')}`;
     await orders.add({
-      data: { _id: orderId, openid, channel, productId, kind, planId: kind === 'plan' ? item.id : '', title: item.name, totalFee: item.price, status: 'pending', createdAt: now() }
+      data: {
+        _id: orderId,
+        openid,
+        channel,
+        productId,
+        kind,
+        planId: kind === 'plan' ? item.id : '',
+        // 海报包的张数记在订单上：入账与退款都按下单时的张数，不受之后调整目录影响
+        quota: kind === 'single' ? item.quota : 0,
+        title: item.name,
+        totalFee: item.price,
+        status: 'pending',
+        createdAt: now()
+      }
     });
     if (channel === 'virtual') {
       return { ok: true, orderId, virtual: xpay.buildPayment({ orderId, productId, price: item.price, sessionKey }) };
@@ -222,7 +235,7 @@ function createHandler(deps) {
       let grant;
       if (order.kind === 'plan') grant = quota.grantPlan(user, catalog.plans[order.planId], orderId, t0);
       else if (order.kind === 'lifetime') grant = quota.grantLifetime(user, catalog.lifetime, orderId, t0);
-      else grant = quota.grantSingle(user, catalog.single);
+      else grant = quota.grantSingle(user, { quota: order.quota || catalog.single.quota });
       await uref.update({ data: grant });
       await oref.update({ data: { status: 'paid', paidAt: t0, transactionId: paid.transactionId || '' } });
       return { ok: true };
