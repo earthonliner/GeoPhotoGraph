@@ -10,7 +10,7 @@
         <view class="capsule {{isMember ? 'capsule-dark' : ''}}" hover-class="tap-dim" bindtap="onOpenPaywall">{{memberChip}}</view>
       </view>
     </view>
-    <text wx:if="{{!hasPhoto}}" class="header-sub">把照片与它发生的地方，做成一张海报</text>
+    <text wx:if="{{!hasPhoto}}" class="header-sub">一张照片，一个地点，设计你的地图海报</text>
   </view>
 
   <view wx:if="{{hasPhoto}}" class="tpl-bar">
@@ -52,12 +52,16 @@
         <text wx:if="{{busyText}}" class="busy-text">{{busyText}}</text>
       </view>
     </view>
-    <view wx:if="{{hasPhoto && stageNote}}" class="stage-note">
+    <view wx:if="{{hasPhoto && !hasLocation && !placeManual}}" class="stage-note">
+      <text>地图与地名会根据拍摄地点生成</text>
+      <text class="link stage-link" bindtap="onPickLocation">选择拍摄地点</text>
+    </view>
+    <view wx:elif="{{hasPhoto && stageNote}}" class="stage-note">
       <text>{{stageNote}}</text>
       <text wx:if="{{currentLocked && canPurchase}}" class="link stage-link" bindtap="onOpenPaywall">解锁无水印高清图</text>
     </view>
     <text wx:if="{{singlePage}}" class="stage-note">当前为朋友圈预览，点击下方「前往小程序」即可用自己的照片制作</text>
-    <text wx:elif="{{!hasPhoto}}" class="stage-note">选择照片，自动读取拍摄日期与地点；读不到地点时，选择一次即可</text>
+    <text wx:elif="{{!hasPhoto}}" class="stage-note">选一张照片，标上它的拍摄地点，挑一款模板，即可生成海报</text>
     <text wx:if="{{tokenMissing}}" class="stage-note stage-warn">开发提示：未配置 Mapbox Token（utils/config.local.js），当前使用本地简约底图，地名不可用</text>
   </view>
 
@@ -76,7 +80,7 @@
             <view wx:if="{{batchMode === 'random' && itemCount > 1}}" class="thumb-scrim">
               <text class="thumb-tpl">{{item.tplName}}</text>
             </view>
-            <text wx:if="{{item.noLoc}}" class="thumb-badge thumb-badge-warn">无位置</text>
+            <text wx:if="{{item.noLoc}}" class="thumb-badge thumb-badge-tint">选地点</text>
             <text wx:elif="{{item.locked && lockBadges}}" class="thumb-badge">水印</text>
             <view wx:if="{{itemCount > 1}}" class="thumb-hit thumb-hit-left" data-id="{{item.id}}" catchtap="onToggleSelect">
               <view class="check {{item.selected ? 'check-on' : ''}}"></view>
@@ -109,8 +113,13 @@
         <text class="section-title">地点与日期</text>
       </view>
       <view class="group">
-        <view class="cell">
-          <text class="cell-label">地点</text>
+        <view class="cell" hover-class="cell-hover" bindtap="onPickLocation">
+          <text class="cell-label">拍摄地点</text>
+          <text class="cell-value {{hasLocation ? '' : 'cell-value-tint'}}">{{hasLocation ? coordText : '选择'}}</text>
+          <view class="chevron"></view>
+        </view>
+        <view class="cell cell-line">
+          <text class="cell-label">地名</text>
           <input
             class="cell-input"
             value="{{place}}"
@@ -129,11 +138,6 @@
             <text class="pill">{{dateText || '选择日期'}}</text>
           </view>
         </picker>
-        <view class="cell cell-line" hover-class="cell-hover" bindtap="onPickLocation">
-          <text class="cell-label">坐标</text>
-          <text class="cell-value {{hasLocation ? '' : 'cell-value-tint'}}">{{hasLocation ? coordText : '选择位置'}}</text>
-          <view class="chevron"></view>
-        </view>
         <view class="cell cell-line">
           <text class="cell-label">地名语言</text>
           <view class="seg seg-mini">
@@ -360,40 +364,87 @@
     </view>
   </view>
 
-  <view wx:if="{{searchVisible}}" class="mask" bindtap="onSearchClose">
-    <view class="sheet sheet-search" catchtap="noop">
+  <view wx:if="{{placeVisible}}" class="mask" bindtap="onPlaceClose">
+    <view class="sheet sheet-place {{canSearch ? 'sheet-place-search' : ''}}" catchtap="noop">
       <view class="grabber"></view>
-      <view class="search-bar">
-        <view class="search-field">
-          <view class="search-icon"></view>
-          <input
-            class="search-input"
-            focus
-            value="{{searchKeyword}}"
-            placeholder="搜索城市、地标、地址（全球）"
-            placeholder-class="ph"
-            confirm-type="search"
-            bindinput="onSearchInput"
-            bindconfirm="onSearchConfirm"
-          />
-        </view>
-        <text class="search-cancel" bindtap="onSearchClose">取消</text>
+      <view class="sheet-nav">
+        <text class="sheet-side"></text>
+        <text class="sheet-title">{{placeTitle}}</text>
+        <text class="sheet-side sheet-close" bindtap="onPlaceClose">{{hasLocation ? '取消' : '稍后'}}</text>
       </view>
-      <scroll-view scroll-y class="search-list">
-        <view
-          wx:for="{{searchResults}}"
-          wx:key="address"
-          class="result {{index > 0 ? 'cell-line' : ''}}"
-          hover-class="cell-hover"
-          data-index="{{index}}"
-          bindtap="onSelectResult"
-        >
-          <text class="result-name">{{item.name}}</text>
-          <text class="result-addr">{{item.address}}</text>
-        </view>
-        <view wx:if="{{searching}}" class="search-tip">搜索中…</view>
-        <view wx:elif="{{searchEmpty}}" class="search-tip">没有找到相关地点</view>
+      <text class="place-sub">海报上的地图、地名和坐标都会根据这个地点生成</text>
+      <view wx:if="{{canSearch}}" class="search-field place-search">
+        <view class="search-icon"></view>
+        <input
+          class="search-input"
+          value="{{searchKeyword}}"
+          placeholder="搜索城市、地标、地址（全球）"
+          placeholder-class="ph"
+          confirm-type="search"
+          cursor-spacing="24"
+          bindinput="onSearchInput"
+          bindconfirm="onSearchConfirm"
+        />
+      </view>
+      <scroll-view scroll-y class="sheet-body">
+        <block wx:if="{{searchKeyword}}">
+          <view wx:if="{{searchResults.length}}" class="group">
+            <view
+              wx:for="{{searchResults}}"
+              wx:key="address"
+              class="result {{index > 0 ? 'cell-line' : ''}}"
+              hover-class="cell-hover"
+              data-index="{{index}}"
+              bindtap="onSelectResult"
+            >
+              <text class="result-name">{{item.name}}</text>
+              <text class="result-addr">{{item.address}}</text>
+            </view>
+          </view>
+          <view wx:if="{{searching}}" class="search-tip">搜索中…</view>
+          <view wx:elif="{{searchEmpty}}" class="search-tip">没有找到相关地点</view>
+        </block>
+        <block wx:else>
+          <view class="group">
+            <view wx:if="{{fuzzyOn}}" class="cell cell-tall" hover-class="cell-hover" bindtap="onPlaceCurrent">
+              <view class="cell-main">
+                <text class="cell-title place-action">使用当前所在城市</text>
+                <text class="cell-sub">仅在点按时获取一次，精确到城市</text>
+              </view>
+              <view class="chevron"></view>
+            </view>
+            <view class="cell cell-tall {{fuzzyOn ? 'cell-line' : ''}}" hover-class="cell-hover" bindtap="onPlaceMap">
+              <view class="cell-main">
+                <text class="cell-title place-action">在地图上选点</text>
+                <text class="cell-sub">{{canSearch ? '微信地图，适合国内地点；海外请用上方搜索' : '微信地图'}}</text>
+              </view>
+              <view class="chevron"></view>
+            </view>
+          </view>
+          <block wx:if="{{recentList.length}}">
+            <text class="place-head">最近使用</text>
+            <view class="group">
+              <view
+                wx:for="{{recentList}}"
+                wx:key="name"
+                class="cell {{index > 0 ? 'cell-line' : ''}}"
+                hover-class="cell-hover"
+                data-index="{{index}}"
+                bindtap="onPlaceRecent"
+              >
+                <text class="cell-label place-recent">{{item.name}}</text>
+              </view>
+            </view>
+          </block>
+        </block>
       </scroll-view>
+      <view wx:if="{{placeOthers > 0}}" class="group place-all">
+        <view class="cell">
+          <text class="cell-label">同时用于其他 {{placeOthers}} 张照片</text>
+          <switch class="cell-switch" checked="{{placeApplyAll}}" color="#34C759" bindchange="onPlaceApplyAll" />
+        </view>
+      </view>
+      <text wx:if="{{placeOthers > 0}}" class="section-foot place-foot">只用于还没有拍摄地点的照片，之后仍可逐张修改。</text>
     </view>
   </view>
 

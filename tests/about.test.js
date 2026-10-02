@@ -30,6 +30,8 @@ test('帮助页：安卓正式版列出价格、云端权益、隐私说明与�
   const { page } = load({ openPrivacyContract() {} });
   assert.strictEqual(page.data.version, '版本 1.0.0');
   assert.ok(page.data.steps[0].text.includes('一次最多 9 张'));
+  assert.strictEqual(page.data.steps[1].title, '标上地点');
+  assert.ok(answer(page, '为什么要自己选择拍摄地点？').includes('照片本身带有定位时会自动读取'));
   assert.strictEqual(
     answer(page, '会员怎么收费？'),
     '月度会员 ¥14.9，30 天内可保存 120 张；年度会员 ¥109.9，365 天内可保存 2000 张；' +
