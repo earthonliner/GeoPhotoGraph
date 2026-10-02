@@ -47,7 +47,7 @@ function faqs(canPurchase, cloud, ios) {
     {
       q: '批量导入和批量下载怎么用？',
       a: canPurchase
-        ? `一次最多导入 ${MAX_BATCH} 张。批量导入和批量下载只对月度、年度、买断会员和邀请码开放，单张解锁不含批量。`
+        ? `一次最多导入 ${MAX_BATCH} 张。批量导入和批量下载只对月度、年度、买断会员和邀请码开放，海报包不含批量。`
         : `一次最多导入 ${MAX_BATCH} 张。批量导入和批量下载为会员功能，已有会员权益或邀请码的用户可以使用。`
     }
   ];
@@ -58,8 +58,9 @@ function faqs(canPurchase, cloud, ios) {
     list.push({
       q: '会员怎么收费？',
       a:
-        `${planText}；${lifetime.name} ${membership.formatPrice(lifetime.price)}，一次买断、永久有效，每月可保存 ${lifetime.monthly} 张，次月 1 日重置、不累计；` +
-        `也可以 ${membership.formatPrice(single.price)} 单独解锁一张（不含批量）。月度和年度会员可以重复购买，额度叠加使用，到期后未用完的额度失效。`
+        `${single.name} ${membership.formatPrice(single.price)}，${single.quota} 张、长期有效（不含批量）；${planText}；` +
+        `${lifetime.name} ${membership.formatPrice(lifetime.price)}，一次买断、长期有效，每月最多保存 ${lifetime.monthly} 张，次月 1 日重置、不累计。` +
+        '会员（月度、年度、买断）可以批量导入和批量下载；月度和年度会员可以重复购买，额度叠加使用，到期后未用完的额度失效。'
     });
   }
   if (canPurchase && ios) {

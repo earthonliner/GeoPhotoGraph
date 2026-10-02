@@ -113,7 +113,7 @@
           <view class="bleed-end"></view>
         </scroll-view>
         <text wx:if="{{itemCount === 1 && batchOk}}" class="section-foot">点按 + 可继续添加，最多 {{maxBatch}} 张，一次生成多张海报。</text>
-        <text wx:elif="{{itemCount === 1}}" class="section-foot">{{canPurchase ? '批量导入与批量下载为会员功能：月度、年度、买断会员和邀请码可用，单张解锁不含批量。' : '批量导入与批量下载为会员功能。'}}<text class="link" bindtap="onOpenPaywall">{{canPurchase ? '查看会员权益' : '会员与额度'}}</text></text>
+        <text wx:elif="{{itemCount === 1}}" class="section-foot">{{canPurchase ? '批量导入与批量下载为会员功能：月度、年度、买断会员和邀请码可用，海报包不含批量。' : '批量导入与批量下载为会员功能。'}}<text class="link" bindtap="onOpenPaywall">{{canPurchase ? '查看会员权益' : '会员与额度'}}</text></text>
         <text wx:elif="{{batchMode === 'unique'}}" class="section-foot">所有照片使用同一模板。点按缩略图编辑单张，左上角勾选的照片用于批量下载。</text>
         <text wx:else class="section-foot">每张照片在当前分类内随机分配模板，点按缩略图可单独更换。左上角勾选的照片用于批量下载。</text>
       </view>
@@ -312,10 +312,20 @@
 
         <block wx:if="{{canPurchase}}">
           <view class="group">
+            <view class="cell cell-tall" hover-class="cell-hover" data-kind="single" bindtap="onBuy">
+              <view class="cell-main">
+                <view class="cell-title-row">
+                  <text class="cell-title">{{singleOffer.name}}</text>
+                  <text class="plan-tag">{{singleOffer.unitText}}</text>
+                </view>
+                <text class="cell-sub">{{singleOffer.desc}}</text>
+              </view>
+              <text class="price">{{singleOffer.priceText}}</text>
+            </view>
             <view
               wx:for="{{plans}}"
               wx:key="id"
-              class="cell cell-tall {{index > 0 ? 'cell-line' : ''}}"
+              class="cell cell-tall cell-line"
               hover-class="cell-hover"
               data-kind="{{item.kind}}"
               data-id="{{item.id}}"
@@ -330,15 +340,8 @@
               </view>
               <text class="price">{{item.priceText}}</text>
             </view>
-            <view wx:if="{{hasPhoto}}" class="cell cell-tall cell-line" hover-class="cell-hover" data-kind="single" bindtap="onBuy">
-              <view class="cell-main">
-                <text class="cell-title">{{singleOffer.name}}</text>
-                <text class="cell-sub">{{singleOffer.desc}}</text>
-              </view>
-              <text class="price">{{singleOffer.priceText}}</text>
-            </view>
           </view>
-          <text class="section-foot">月度、年度、买断会员开放批量导入与批量下载，买断每月额度有限、次月 1 日重置；单张解锁不含批量。解锁后可保存 {{exportSize}} 无水印高清海报，每保存一张消耗 1 个额度，同一张照片同一模板再次保存不重复计费。额度用完后，可再次购买月度或年度会员叠加使用。</text>
+          <text class="section-foot">月度、年度、买断会员开放批量导入与批量下载，买断每月最多 {{lifetimeMonthly}} 张、次月 1 日重置；海报包长期有效，不含批量。解锁后可保存 {{exportSize}} 无水印高清海报，每保存一张消耗 1 个额度，同一张照片同一模板再次保存不重复计费。额度用完后，可再次购买月度或年度会员叠加使用。</text>
         </block>
         <block wx:else>
           <view class="group">

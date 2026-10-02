@@ -40,7 +40,7 @@ const inDays = (n) => Date.now() + n * 86400000;
 // 本月免费额度已用完的免费用户；月度会员（已用 used 张）
 const freeOut = () => ({ invite: false, bought: false, freeMonth: MONTH(), freeUsed: 10, packs: [] });
 const monthMember = (used = 0) => ({ bought: true, packs: [{ planId: 'month', quota: 120, used, until: inDays(30) }] });
-const BATCH_NOTICE = '批量导入与批量下载只对月度、年度、买断会员和邀请码开放，单张解锁不含批量。';
+const BATCH_NOTICE = '批量导入与批量下载只对月度、年度、买断会员和邀请码开放，海报包不含批量。';
 
 // cloud 模式：页面 + payment.js + 云函数（内存数据库）。offlineAfter 次扣额度之后模拟断网
 // virtual 为 true 时走虚拟支付（wx.requestVirtualPayment），否则走云支付
@@ -207,7 +207,7 @@ test('免费版：只有拍立得每月 10 张免费，其余模板带水印且�
   assert.strictEqual(page.data.memberChip, '免费 · 10 张');
 });
 
-test('本地模式购买：单张可用于任意模板，会员额度叠加，买断只能买一次，购买后继续刚才的保存', async () => {
+test('本地模式购买：海报包可用于任意模板，会员额度叠加，买断只能买一次，购买后继续刚才的保存', async () => {
   const wx = createWx();
   wx.files = ['a.jpg', 'k.jpg', 'x.jpg'];
   wx.store['geopics.membership'] = freeOut();
@@ -226,33 +226,35 @@ test('本地模式购买：单张可用于任意模板，会员额度叠加，�
   assert.ok(page.data.paywallVisible);
   wx.modalConfirm = true;
 
-  // 单张解锁后自动继续保存，用掉这一张额度；不含批量
+  // 买海报包后自动继续保存，用掉 1 张，剩 9 张可用于任意模板；不含批量
   await page.onBuy(tap({ kind: 'single' }));
   await sleep(450);
   assert.ok(!page.data.paywallVisible);
   assert.deepStrictEqual(wx.calls.save, [`poster-${page.poster.id}.jpg`]);
-  assert.strictEqual(page.member.singles, 0);
+  assert.strictEqual(page.member.singles, 9);
+  assert.strictEqual(page.data.memberChip, '剩余 9 张');
   assert.strictEqual(page.data.batchOk, false);
   assert.strictEqual(page.data.currentLocked, false, '已保存的这张在该模板下保持解锁');
   page.onTapTemplate(tap({ id: 'arch' }));
-  assert.strictEqual(page.data.currentLocked, true);
+  assert.strictEqual(page.data.currentLocked, false, '海报包的剩余张数可用于其他模板');
 
   // 月度会员：叠加额度、开放批量
   await page.onOpenPaywall();
   await page.onBuy(tap({ kind: 'plan', id: 'month' }));
   await sleep(450);
   assert.strictEqual(page.data.batchOk, true);
-  assert.strictEqual(page.data.memberChip, '会员 · 120 张');
+  assert.strictEqual(page.data.memberChip, '会员 · 69 张');
   assert.strictEqual(page.data.currentLocked, false, '会员额度适用于所有模板');
   await page.onSavePoster();
   assert.strictEqual(wx.calls.save.length, 2);
-  assert.strictEqual(page.data.memberChip, '会员 · 119 张');
+  assert.strictEqual(page.data.memberChip, '会员 · 68 张');
+  assert.strictEqual(page.member.singles, 9, '先用月度额度，海报包留到最后');
 
   // 买断：只能买一次，买过后不再出现在档位里
   await page.onOpenPaywall();
   await page.onBuy(tap({ kind: 'lifetime', id: 'lifetime' }));
   await sleep(450);
-  assert.strictEqual(page.member.lifetime.quota, 120);
+  assert.strictEqual(page.member.lifetime.quota, 100);
   assert.strictEqual(page.member.lifetime.month, MONTH());
   assert.strictEqual(page.data.plans.length, 2);
   assert.ok(page.data.packLines.some((l) => l.startsWith('买断会员 本月剩余')));
@@ -262,7 +264,7 @@ test('本地模式购买：单张可用于任意模板，会员额度叠加，�
   assert.ok(wx.store['geopics.membership'].lifetime, '买断记录写入缓存');
 });
 
-test('批量：导入与下载只对月度、年度、买断和邀请码开放，只买单张不含批量', async () => {
+test('批量：导入与下载只对月度、年度、买断和邀请码开放，只买海报包不含批量', async () => {
   const wx = createWx();
   wx.files = ['a.jpg', 'b.jpg', 'k.jpg'];
   wx.store['geopics.membership'] = freeOut();
@@ -280,12 +282,12 @@ test('批量：导入与下载只对月度、年度、买断和邀请码开放�
   assert.strictEqual(page.data.paywallNotice, BATCH_NOTICE);
   assert.strictEqual(wx.calls.chooseMedia, 1);
 
-  // 只买单张不含批量：买完没有继续导入，面板关闭
+  // 只买海报包不含批量：买完没有继续导入，面板关闭
   await page.onBuy(tap({ kind: 'single' }));
   await sleep(450);
-  assert.strictEqual(page.member.singles, 1);
+  assert.strictEqual(page.member.singles, 10);
   assert.strictEqual(page.data.batchOk, false);
-  assert.strictEqual(wx.calls.chooseMedia, 1, '单张解锁不会打开批量选图');
+  assert.strictEqual(wx.calls.chooseMedia, 1, '海报包不会打开批量选图');
   assert.strictEqual(page.data.itemCount, 1);
 
   // 直接走“继续添加”也会被拦下
@@ -392,7 +394,7 @@ test('部分下载：会员额度不足时询问，只下载额度内的照片',
   await page.onBuy(tap({ kind: 'plan', id: 'year' }));
   await sleep(450);
   assert.strictEqual(page.member.packs.length, 2);
-  assert.strictEqual(page.data.memberLabel, '会员 · 剩余 1999 张');
+  assert.strictEqual(page.data.memberLabel, '会员 · 剩余 499 张');
   assert.strictEqual(wx.calls.save.length, 1, '购买后继续保存');
 });
 
@@ -454,7 +456,7 @@ test('cloud：导出前由服务端扣额度，本地篡改会被纠正，支付
   await page.onBuy(tap({ kind: 'plan', id: 'month' }));
   await sleep(450);
   assert.ok(!page.data.paywallVisible);
-  assert.strictEqual(page.member.packs[0].quota, 120);
+  assert.strictEqual(page.member.packs[0].quota, 60);
   assert.strictEqual(env.wx.calls.save.length, 1, '购买后继续保存');
   assert.strictEqual(env.fake.dump().users['openid-a'].packs[0].used, 1);
   assert.strictEqual(page.data.batchOk, true);
@@ -467,10 +469,10 @@ test('cloud：导出前由服务端扣额度，本地篡改会被纠正，支付
   assert.ok(env.wx.calls.toast.includes('支付结果确认中，稍后自动到账'));
   assert.strictEqual(page.member.singles, before);
   const pending = Object.values(env.fake.dump().orders).find((o) => o.status === 'pending' && o.kind === 'single');
-  env.fake.ledger[pending._id] = 129;
-  await env.main({ returnCode: 'SUCCESS', resultCode: 'SUCCESS', outTradeNo: pending._id, totalFee: 129, transactionId: 'wx-late' });
+  env.fake.ledger[pending._id] = 990;
+  await env.main({ returnCode: 'SUCCESS', resultCode: 'SUCCESS', outTradeNo: pending._id, totalFee: 990, transactionId: 'wx-late' });
   await page.onShow();
-  assert.strictEqual(page.member.singles, before + 1);
+  assert.strictEqual(page.member.singles, before + 10);
   clearTimeout(page._syncTimer);
 
   await page.onOpenPaywall();
@@ -496,8 +498,8 @@ test('iOS：虚拟支付通道下可以购买，Apple 支付完成后由服务�
   env.pay = 'notify';
   await page.onBuy(tap({ kind: 'plan', id: 'month' }));
   await sleep(450);
-  assert.strictEqual(page.member.packs[0].quota, 120);
-  assert.strictEqual(page.data.memberChip, '会员 · 120 张');
+  assert.strictEqual(page.member.packs[0].quota, 60);
+  assert.strictEqual(page.data.memberChip, '会员 · 60 张');
   const paid = Object.values(env.fake.dump().orders).filter((o) => o.status === 'paid');
   assert.deepStrictEqual(paid.map((o) => [o.channel, o.productId]), [['virtual', 'geopics_month']]);
 
@@ -508,7 +510,7 @@ test('iOS：虚拟支付通道下可以购买，Apple 支付完成后由服务�
   assert.ok(!page.member.lifetime);
   clearTimeout(page._syncTimer);
   const pending = Object.values(env.fake.dump().orders).find((o) => o.status === 'pending' && o.kind === 'lifetime');
-  env.xp.pay(pending._id, 29900);
+  env.xp.pay(pending._id, 9900);
   await page.onShow();
   assert.strictEqual(page.member.lifetime.planId, 'lifetime');
   clearTimeout(page._syncTimer);
@@ -533,11 +535,11 @@ test('cloud：买断由服务端入账，重复购买被拒绝并同步已有权
   assert.deepStrictEqual(page.data.plans.map((x) => x.kind), ['plan', 'plan', 'lifetime']);
   await page.onBuy(tap({ kind: 'lifetime', id: 'lifetime' }));
   await sleep(450);
-  assert.deepStrictEqual(env.fake.dump().users['openid-a'].lifetime.quota, 120);
+  assert.deepStrictEqual(env.fake.dump().users['openid-a'].lifetime.quota, 100);
   assert.strictEqual(page.member.lifetime.planId, 'lifetime');
   assert.strictEqual(page.data.batchOk, true);
   assert.deepStrictEqual(page.data.plans.map((x) => x.kind), ['plan', 'plan']);
-  assert.strictEqual(page.data.memberChip, '会员 · 120 张');
+  assert.strictEqual(page.data.memberChip, '会员 · 100 张');
 
   // 另一台设备上已买过、本机缓存还不知道：服务端拒绝，页面提示并同步
   page.member = membership.normalize({});
@@ -886,14 +888,16 @@ test('开发提示：只在开发版 / 体验版且未配置 token 时显示', (
   assert.strictEqual(load('develop', true), false);
 });
 
-test('付费面板：会员档位标出单张均价，均价最低的一档高亮', () => {
+test('付费面板：海报包为入门档，会员档位标出单张均价，均价最低的一档高亮', () => {
   const page = createPage(createWx());
+  const pack = page.data.singleOffer;
+  assert.deepStrictEqual([pack.name, pack.priceText, pack.unitText, pack.quota], ['海报包', '¥9.9', '约 ¥0.99/张', 10]);
   const [month, year, lifetime] = page.data.plans;
-  assert.strictEqual(month.unitText, '约 ¥0.12/张');
-  assert.strictEqual(year.unitText, '约 ¥0.05/张');
+  assert.strictEqual(month.unitText, '约 ¥0.21/张');
+  assert.strictEqual(year.unitText, '约 ¥0.10/张');
   assert.deepStrictEqual([month.best, year.best, lifetime.best], [false, true, false]);
-  assert.deepStrictEqual([month.priceText, year.priceText, lifetime.priceText], ['¥14.9', '¥109.9', '¥299']);
-  assert.deepStrictEqual([lifetime.kind, lifetime.unitText, lifetime.desc], ['lifetime', '永久有效', '一次买断，永久有效，每月 120 张']);
+  assert.deepStrictEqual([month.priceText, year.priceText, lifetime.priceText], ['¥12.9', '¥49.9', '¥99']);
+  assert.deepStrictEqual([lifetime.kind, lifetime.unitText, lifetime.desc], ['lifetime', '长期有效', '一次买断，长期有效，每月最多 100 张，含批量']);
 });
 
 test('弹层：打开前用截图顶替原生 canvas，全部关闭后恢复并重绘', async () => {

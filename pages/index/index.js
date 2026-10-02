@@ -35,7 +35,7 @@ const MAPBOX_LOGO = '/assets/mapbox-logo.png';
 // 回到页面时向服务端同步权益的最短间隔：选图、定位等系统界面返回也会触发 onShow
 const SYNC_INTERVAL = 30 * 1000;
 // 批量导入与批量下载只对月度、年度、买断会员和邀请码开放（不提供购买的平台，文案里不带购买引导）
-const BATCH_NOTICE = '批量导入与批量下载只对月度、年度、买断会员和邀请码开放，单张解锁不含批量。';
+const BATCH_NOTICE = '批量导入与批量下载只对月度、年度、买断会员和邀请码开放，海报包不含批量。';
 const BATCH_NOTICE_IOS = '批量导入与批量下载仅对会员开放，已有会员权益或邀请码的用户可以使用。';
 const SHARE_TITLE = 'GEOPICS · 把照片与它发生的地方，做成一张海报';
 // 转发卡片按 5:4 显示
@@ -150,6 +150,14 @@ function templateTabs(categoryId) {
   return templatesOf(categoryId).map((t) => ({ id: t.id, name: t.name }));
 }
 
+const unitText = (price, quota) => `约 ¥${(price / quota / 100).toFixed(2)}/张`;
+
+// 海报包：入门档，排在会员档位之前
+function packOffer() {
+  const single = appConfig.membership.single;
+  return Object.assign({}, single, { priceText: membership.formatPrice(single.price), unitText: unitText(single.price, single.quota) });
+}
+
 // 会员档位：月度 / 年度附上单张均价并标出均价最低的一档；买断只能买一次，已拥有时不再出现
 function planOffers(state) {
   const plans = appConfig.membership.plans;
@@ -159,13 +167,13 @@ function planOffers(state) {
     Object.assign({}, pl, {
       kind: 'plan',
       priceText: membership.formatPrice(pl.price),
-      unitText: `约 ¥${(unit(pl) / 100).toFixed(2)}/张`,
+      unitText: unitText(pl.price, pl.quota),
       best: plans.length > 1 && unit(pl) === best
     })
   );
   const lifetime = appConfig.membership.lifetime;
   if (lifetime && !(state && membership.hasLifetime(state))) {
-    rows.push(Object.assign({}, lifetime, { kind: 'lifetime', priceText: membership.formatPrice(lifetime.price), unitText: '永久有效', best: false }));
+    rows.push(Object.assign({}, lifetime, { kind: 'lifetime', priceText: membership.formatPrice(lifetime.price), unitText: '长期有效', best: false }));
   }
   return rows;
 }
@@ -185,7 +193,8 @@ Page({
     lockBadges: false,
     paywallVisible: false,
     plans: planOffers(),
-    singleOffer: Object.assign({ priceText: membership.formatPrice(appConfig.membership.single.price) }, appConfig.membership.single),
+    singleOffer: packOffer(),
+    lifetimeMonthly: appConfig.membership.lifetime.monthly,
     inviteInput: '',
     inviteError: '',
     paywallNotice: '',
@@ -660,7 +669,6 @@ Page({
       if (!plan || membership.hasLifetime(this.member)) return;
       order = { kind, title: plan.name, priceText: membership.formatPrice(plan.price) };
     } else {
-      if (!this.data.hasPhoto) return;
       const single = appConfig.membership.single;
       order = { kind: 'single', title: single.name, priceText: membership.formatPrice(single.price) };
     }
@@ -774,7 +782,7 @@ Page({
     await actions[tapIndex][1]();
   },
 
-  // 购买会员后继续刚才想做的批量导入；买的若是单张（不含批量）则不再打扰
+  // 购买会员后继续刚才想做的批量导入；买的若是海报包（不含批量）则不再打扰
   resumeAddPhotos() {
     if (membership.batchAllowed(this.member)) return this.onAddPhotos();
     return null;

@@ -1,7 +1,7 @@
 /**
  * 额度规则（纯函数，不接触数据库）。与小程序端 utils/membership.js 的规则一致：
  * 保存一张无水印海报消耗 1 张，顺序为免费额度（仅免费模板，按北京时间自然月重置）→ 买断当月额度 →
- * 额度包（最早到期的先扣）→ 单张额度；邀请码会员不限量。
+ * 额度包（最早到期的先扣）→ 海报包；邀请码会员不限量。
  */
 const DAY = 24 * 60 * 60 * 1000;
 const MONTH_OFFSET = 8 * 60 * 60 * 1000;
@@ -139,14 +139,15 @@ function grantSingle(user, single) {
   return { singles: cleanCount(user.singles) + single.quota };
 }
 
-// 退款后收回该订单发放的权益（额度包 / 买断记录 / 单张额度），bought 保持不变
+// 退款后收回该订单发放的权益（额度包 / 买断记录 / 海报包张数），bought 保持不变。
+// 早期的单张订单没有记录 quota，按 1 张收回
 function revokeOrder(user, order) {
   if (order.kind === 'plan') return { packs: (user.packs || []).map(cleanPack).filter((p) => p.orderId !== order._id) };
   if (order.kind === 'lifetime') {
     const l = cleanLifetime(user.lifetime);
     return l && l.orderId === order._id ? { lifetime: null } : {};
   }
-  return { singles: Math.max(0, cleanCount(user.singles) - 1) };
+  return { singles: Math.max(0, cleanCount(user.singles) - (cleanCount(order.quota) || 1)) };
 }
 
 // 返回给小程序的权益快照：不含 charged 等内部字段

@@ -42,7 +42,7 @@ test('xpay createOrder: signs signData with the AppKey and the user session key,
     env: 0,
     currencyType: 'CNY',
     productId: 'geopics_month',
-    goodsPrice: 1490,
+    goodsPrice: 1290,
     outTradeNo: r.orderId,
     attach: 'geopics_month'
   });
@@ -50,7 +50,7 @@ test('xpay createOrder: signs signData with the AppKey and the user session key,
   assert.strictEqual(v.paySig, hmac(APP.XPAY_APP_KEY, `requestVirtualPayment&${v.signData}`));
   assert.strictEqual(v.signature, hmac('session-key-a==', v.signData));
   const o = fake.dump().orders[r.orderId];
-  assert.deepStrictEqual([o.channel, o.productId, o.totalFee, o.status, o.openid], ['virtual', 'geopics_month', 1490, 'pending', 'openid-a']);
+  assert.deepStrictEqual([o.channel, o.productId, o.totalFee, o.status, o.openid], ['virtual', 'geopics_month', 1290, 'pending', 'openid-a']);
 });
 
 test('xpay createOrder: every product maps to its own item id and catalog price', async () => {
@@ -61,7 +61,7 @@ test('xpay createOrder: every product maps to its own item id and catalog price'
     const d = JSON.parse(r.virtual.signData);
     seen[d.productId] = d.goodsPrice;
   }
-  assert.deepStrictEqual(seen, { geopics_month: 1490, geopics_year: 10990, geopics_lifetime: 29900, geopics_single: 129 });
+  assert.deepStrictEqual(seen, { geopics_month: 1290, geopics_year: 4990, geopics_lifetime: 9900, geopics_single: 990 });
 });
 
 test('xpay createOrder: sandbox env signs with env 1', async () => {
@@ -83,7 +83,7 @@ test('xpay createOrder: refuses without config, login code, matching identity or
 
   fake.setOpenid('openid-a');
   const life = await order(main, { kind: 'lifetime' });
-  xp.pay(life.orderId, 29900);
+  xp.pay(life.orderId, 9900);
   await main(deliver(life.orderId));
   assert.deepStrictEqual(pick(await order(main, { kind: 'lifetime' })), [false, 'already_owned']);
 });
@@ -93,15 +93,15 @@ test('xpay deliver notify: grants only what WeChat confirms via query_order, exa
   const { orderId } = await order(main);
 
   assert.strictEqual((await main(deliver(orderId))).ErrCode, -1, 'WeChat does not know the order yet');
-  xp.pay(orderId, 1490, { status: 1 });
+  xp.pay(orderId, 1290, { status: 1 });
   assert.deepStrictEqual(await main(deliver(orderId)), { ErrCode: -1, ErrMsg: 'order not paid yet' }, 'unpaid order is not granted and WeChat retries');
   assert.strictEqual(packsOf(fake).length, 0);
 
-  xp.pay(orderId, 1490);
+  xp.pay(orderId, 1290);
   assert.deepStrictEqual(await main(deliver(orderId)), ACK);
   assert.deepStrictEqual(await main(deliver(orderId)), ACK, 'repeated push');
   assert.strictEqual(packsOf(fake).length, 1);
-  assert.deepStrictEqual([packsOf(fake)[0].planId, packsOf(fake)[0].quota], ['month', 120]);
+  assert.deepStrictEqual([packsOf(fake)[0].planId, packsOf(fake)[0].quota], ['month', 60]);
   const o = fake.dump().orders[orderId];
   assert.deepStrictEqual([o.status, o.transactionId], ['paid', `VPO${orderId}`]);
 });
@@ -111,7 +111,7 @@ test('xpay deliver notify: forged, mismatched or foreign events grant nothing', 
   const { orderId } = await order(main);
 
   // 任何人都能调用云函数，伪造的推送没有微信侧付款就不会入账
-  const forged = await main(deliver(orderId, { GoodsInfo: { ProductId: 'geopics_month', ActualPrice: 1490 }, WeChatPayInfo: { MchOrderNo: 'x' } }));
+  const forged = await main(deliver(orderId, { GoodsInfo: { ProductId: 'geopics_month', ActualPrice: 1290 }, WeChatPayInfo: { MchOrderNo: 'x' } }));
   assert.strictEqual(forged.ErrCode, -1);
   assert.strictEqual(packsOf(fake).length, 0);
 
@@ -120,7 +120,7 @@ test('xpay deliver notify: forged, mismatched or foreign events grant nothing', 
   assert.strictEqual(packsOf(fake).length, 0);
   assert.strictEqual(fake.dump().orders[orderId].status, 'pending');
 
-  xp.pay(orderId, 1490);
+  xp.pay(orderId, 1290);
   assert.deepStrictEqual(await main(deliver(orderId, { Env: 1 })), ACK, 'sandbox push is ignored in production');
   assert.strictEqual(packsOf(fake).length, 0);
   assert.deepStrictEqual(await main(deliver('GPNOSUCHORDER')), ACK, 'unknown orders are acknowledged, not retried forever');
@@ -134,7 +134,7 @@ test('xpay deliver notify: forged, mismatched or foreign events grant nothing', 
 test('xpay deliver notify: a failing lookup asks WeChat to retry, and the lost push is reconciled on demand', async () => {
   const { main, fake, xp } = setup();
   const { orderId } = await order(main);
-  xp.pay(orderId, 1490);
+  xp.pay(orderId, 1290);
   const failing = createHandler({ cloud: fake.cloud, env: VIRTUAL_ENV, http: async () => { throw new Error('network'); }, now: () => NOW });
   assert.deepStrictEqual(await failing(deliver(orderId)), { ErrCode: -1, ErrMsg: 'retry' });
   assert.strictEqual(packsOf(fake).length, 0);
@@ -155,7 +155,7 @@ test('xpay query_order: signs the request body, caches and refreshes the access 
   assert.strictEqual(xp.calls.query, 2);
 
   xp.expireToken();
-  xp.pay(a.orderId, 1490);
+  xp.pay(a.orderId, 1290);
   assert.strictEqual((await main({ action: 'syncOrder', orderId: a.orderId })).status, 'paid', 'expired token is refreshed once and retried');
   assert.strictEqual(xp.calls.token, 2);
 
@@ -169,12 +169,12 @@ test('xpay refund notify: revokes the granted entitlement only when the order is
   const month = await order(main);
   const single = await order(main, { kind: 'single' });
   const life = await order(main, { kind: 'lifetime' });
-  xp.pay(month.orderId, 1490); xp.pay(single.orderId, 129); xp.pay(life.orderId, 29900);
+  xp.pay(month.orderId, 1290); xp.pay(single.orderId, 990); xp.pay(life.orderId, 9900);
   for (const o of [month, single, life]) await main(deliver(o.orderId));
   let st = (await main({ action: 'getEntitlement' })).state;
-  assert.deepStrictEqual([st.packs.length, st.singles, !!st.lifetime], [1, 1, true]);
+  assert.deepStrictEqual([st.packs.length, st.singles, !!st.lifetime], [1, 10, true]);
 
-  const refundEvent = (id) => ({ Event: 'xpay_refund_notify', OpenId: 'openid-a', MchOrderId: id, WxOrderId: `VPO${id}`, RefundFee: 1490, RetCode: 0, Env: 0 });
+  const refundEvent = (id) => ({ Event: 'xpay_refund_notify', OpenId: 'openid-a', MchOrderId: id, WxOrderId: `VPO${id}`, RefundFee: 1290, RetCode: 0, Env: 0 });
   assert.deepStrictEqual(await main(refundEvent(month.orderId)), ACK, 'forged refund: WeChat still says paid');
   assert.strictEqual(packsOf(fake).length, 1);
   assert.deepStrictEqual(await main({ ...refundEvent(month.orderId), RetCode: 1 }), ACK);
@@ -194,7 +194,7 @@ test('xpay refund notify: one refund only removes its own order', async () => {
   const { main, fake, xp } = setup();
   const first = await order(main);
   const second = await order(main);
-  xp.pay(first.orderId, 1490); xp.pay(second.orderId, 1490);
+  xp.pay(first.orderId, 1290); xp.pay(second.orderId, 1290);
   await main(deliver(first.orderId)); await main(deliver(second.orderId));
   assert.strictEqual(packsOf(fake).length, 2);
   xp.refund(first.orderId);
@@ -239,13 +239,13 @@ test('client: pay() logs in, opens the virtual payment sheet with the signed par
     }
   };
   await withClient(main, pay, async (payment, calls) => {
-    const res = await payment.pay({ kind: 'plan', planId: 'month', title: '月度会员', priceText: '¥14.9' });
+    const res = await payment.pay({ kind: 'plan', planId: 'month', title: '月度会员', priceText: '¥12.9' });
     assert.deepStrictEqual(Object.keys(params).sort(), ['fail', 'mode', 'paySig', 'signData', 'signature', 'success']);
     assert.strictEqual(params.mode, 'short_series_goods');
     assert.strictEqual(params.paySig, hmac(APP.XPAY_APP_KEY, `requestVirtualPayment&${params.signData}`));
     assert.strictEqual(params.signature, hmac('session-key-a==', params.signData));
     assert.strictEqual(res.ok, true); assert.ok(!res.pending);
-    assert.deepStrictEqual([res.state.packs[0].quota, res.state.bought], [120, true]);
+    assert.deepStrictEqual([res.state.packs[0].quota, res.state.bought], [60, true]);
     assert.strictEqual(calls.login, 1);
     assert.strictEqual(calls.callFunction[0].code, 'code-a');
     assert.strictEqual(calls.virtual.length, 0, 'the override replaced the recorder');
@@ -255,12 +255,12 @@ test('client: pay() logs in, opens the virtual payment sheet with the signed par
 test('client: pay() reports pending when Apple / WeChat confirmation has not reached the server yet', async () => {
   const { main, fake, xp } = setup();
   await withClient(main, {}, async (payment) => {
-    const res = await payment.pay({ kind: 'single', title: '单张解锁', priceText: '¥1.29' });
+    const res = await payment.pay({ kind: 'single', title: '海报包', priceText: '¥9.9' });
     assert.deepStrictEqual([res.ok, res.pending, res.state], [true, true, undefined]);
     assert.strictEqual((await payment.fetchEntitlement()).singles, 0);
     const orderId = Object.keys(fake.dump().orders)[0];
-    xp.pay(orderId, 129);
-    assert.strictEqual((await payment.fetchEntitlement()).singles, 1, 'entitlement catches up through query_order');
+    xp.pay(orderId, 990);
+    assert.strictEqual((await payment.fetchEntitlement()).singles, 10, 'entitlement catches up through query_order');
   });
 });
 

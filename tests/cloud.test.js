@@ -48,7 +48,14 @@ test('catalog: server prices, quotas and free tier match the mini program config
   assert.deepStrictEqual(catalog.lifetime, { id: lifetime.id, name: lifetime.name, price: lifetime.price, monthly: lifetime.monthly });
   assert.strictEqual(catalog.single.price, single.price);
   assert.strictEqual(catalog.single.name, single.name);
-  assert.strictEqual(catalog.single.quota, 1);
+  assert.strictEqual(catalog.single.quota, single.quota);
+  assert.strictEqual(single.quota, 10);
+});
+
+test('quota: a refunded poster pack takes back the size recorded on its order', () => {
+  assert.deepStrictEqual(serverQuota.revokeOrder({ singles: 12 }, { kind: 'single', quota: 10 }), { singles: 2 });
+  assert.deepStrictEqual(serverQuota.revokeOrder({ singles: 3 }, { kind: 'single', quota: 10 }), { singles: 0 }, 'never below zero');
+  assert.deepStrictEqual(serverQuota.revokeOrder({ singles: 3 }, { kind: 'single' }), { singles: 2 }, 'legacy single orders count as one');
 });
 
 test('quota: server charging order matches the client membership rules', () => {
@@ -131,18 +138,18 @@ test('api: only the free template uses the free quota; other templates need paid
 
   // 同一张照片换模板再保存会重新计费：免费的拍立得不能“洗”成付费模板
   const order = await main({ action: 'createOrder', kind: 'single' });
-  await main(notify(order.orderId, 129));
+  await main(notify(order.orderId, 990));
   assert.ok((await save('photo1:polaroid', 'polaroid')).ok);
-  assert.strictEqual((await save('photo1:magazine', 'magazine')).ok, true, 'single credit covers the paid template');
-  assert.strictEqual((await save('photo1:arch', 'arch')).code, 'insufficient');
+  assert.strictEqual((await save('photo1:magazine', 'magazine')).ok, true, 'poster pack covers the paid template');
+  assert.strictEqual((await save('photo1:arch', 'arch')).ok, true);
   const st = (await main({ action: 'getEntitlement' })).state;
-  assert.deepStrictEqual([st.freeUsed, st.singles], [1, 0]);
+  assert.deepStrictEqual([st.freeUsed, st.singles], [1, 8], 'each paid template of the same photo is charged');
 });
 
 test('api: a multi-item consume is all-or-nothing and spends free quota first', async () => {
   const { main, fake } = setup();
   const order = await main({ action: 'createOrder', kind: 'plan', planId: 'month' });
-  await main(notify(order.orderId, 1490));
+  await main(notify(order.orderId, 1290));
   fake.patch('users', 'openid-a', { freeMonth: '2026-09', freeUsed: 9 });
   const r = await main({ action: 'consume', items: [{ key: 'a', tpl: 'polaroid' }, { key: 'b', tpl: 'polaroid' }, { key: 'c', tpl: 'magazine' }] });
   assert.ok(r.ok);
@@ -184,14 +191,14 @@ test('api: createOrder prices come from the server catalog', async () => {
   assert.ok(r.ok); assert.ok(/^GP[0-9A-Z]{1,30}$/.test(r.orderId) && r.orderId.length <= 32);
   assert.strictEqual(r.payment.package, `prepay_id=${r.orderId}`);
   const call = fake.calls.unifiedOrder[0];
-  assert.strictEqual(call.totalFee, 1490);
+  assert.strictEqual(call.totalFee, 1290);
   assert.strictEqual(call.outTradeNo, r.orderId);
   assert.strictEqual(call.subMchId, '1900000001');
   assert.strictEqual(call.functionName, 'api');
   assert.strictEqual(call.envId, 'env-test');
   assert.strictEqual(call.tradeType, 'JSAPI');
   const order = fake.dump().orders[r.orderId];
-  assert.strictEqual(order.status, 'pending'); assert.strictEqual(order.openid, 'openid-a'); assert.strictEqual(order.totalFee, 1490);
+  assert.strictEqual(order.status, 'pending'); assert.strictEqual(order.openid, 'openid-a'); assert.strictEqual(order.totalFee, 1290);
 
   fake.setUnifiedOrder(async () => ({ returnCode: 'SUCCESS', resultCode: 'FAIL', errCodeDes: 'no auth' }));
   const failed = await main({ action: 'createOrder', kind: 'single' });
@@ -204,13 +211,13 @@ test('api: payment notification grants a pack exactly once', async () => {
   const { orderId } = await main({ action: 'createOrder', kind: 'plan', planId: 'month' });
   assert.strictEqual((await main({ action: 'syncOrder', orderId })).status, 'pending');
 
-  assert.deepStrictEqual(await main(notify(orderId, 1490)), { errcode: 0, errmsg: 'OK' });
-  assert.deepStrictEqual(await main(notify(orderId, 1490)), { errcode: 0, errmsg: 'OK' }, 'duplicate notice');
+  assert.deepStrictEqual(await main(notify(orderId, 1290)), { errcode: 0, errmsg: 'OK' });
+  assert.deepStrictEqual(await main(notify(orderId, 1290)), { errcode: 0, errmsg: 'OK' }, 'duplicate notice');
   const r = await main({ action: 'syncOrder', orderId });
   assert.strictEqual(r.status, 'paid');
   assert.strictEqual(r.state.bought, true);
   assert.strictEqual(r.state.packs.length, 1, 'no double grant');
-  assert.deepStrictEqual([r.state.packs[0].planId, r.state.packs[0].quota, r.state.packs[0].used], ['month', 120, 0]);
+  assert.deepStrictEqual([r.state.packs[0].planId, r.state.packs[0].quota, r.state.packs[0].used], ['month', 60, 0]);
   assert.strictEqual(r.state.packs[0].until, NOW + 30 * serverQuota.DAY);
   assert.strictEqual(fake.dump().orders[orderId].transactionId, `wx-${orderId}`);
   assert.strictEqual(fake.dump().users['openid-a'].packs[0].orderId, orderId);
@@ -231,34 +238,35 @@ test('api: notifications with a wrong amount, unknown order or failure grant not
 test('api: a forged payment notification without a real payment grants nothing', async () => {
   const { main, fake } = setup();
   const { orderId } = await main({ action: 'createOrder', kind: 'lifetime' });
-  const forged = { returnCode: 'SUCCESS', resultCode: 'SUCCESS', outTradeNo: orderId, totalFee: 29900, transactionId: 'fake' };
+  const forged = { returnCode: 'SUCCESS', resultCode: 'SUCCESS', outTradeNo: orderId, totalFee: 9900, transactionId: 'fake' };
   assert.deepStrictEqual(await main(forged), { errcode: 0, errmsg: 'OK' });
   assert.strictEqual((await main({ action: 'getEntitlement' })).state.lifetime, null);
   assert.strictEqual(fake.dump().orders[orderId].status, 'pending');
   assert.strictEqual(fake.dump().users['openid-a'].bought, false);
 });
 
-test('api: single unlock adds one save, spent last and without membership perks', async () => {
-  const { main } = setup();
+test('api: a poster pack adds 10 saves, spent last and without membership perks', async () => {
+  const { main, fake } = setup();
   const { orderId } = await main({ action: 'createOrder', kind: 'single' });
-  await main(notify(orderId, 129));
+  assert.strictEqual(fake.dump().orders[orderId].quota, 10, 'the pack size is recorded on the order');
+  await main(notify(orderId, 990));
   const month = await main({ action: 'createOrder', kind: 'plan', planId: 'month' });
-  await main(notify(month.orderId, 1490));
+  await main(notify(month.orderId, 1290));
   let state = (await main({ action: 'getEntitlement' })).state;
-  assert.strictEqual(state.singles, 1); assert.strictEqual(state.bought, true);
+  assert.strictEqual(state.singles, 10); assert.strictEqual(state.bought, true);
 
   for (const k of ['a', 'b']) await main({ action: 'consume', items: [{ key: k, tpl: 'polaroid' }] });
   state = (await main({ action: 'getEntitlement' })).state;
-  assert.deepStrictEqual([state.freeUsed, state.singles, state.packs[0].used], [2, 1, 0], 'free polaroid quota first');
+  assert.deepStrictEqual([state.freeUsed, state.singles, state.packs[0].used], [2, 10, 0], 'free polaroid quota first');
   state = (await main({ action: 'consume', items: [{ key: 'c', tpl: 'magazine' }] })).state;
-  assert.deepStrictEqual([state.singles, state.packs[0].used], [1, 1], 'pack before the single credit');
-  assert.ok((await consumeMany(main, 'bulk', 119, 'magazine')).ok);
+  assert.deepStrictEqual([state.singles, state.packs[0].used], [10, 1], 'monthly pack before the poster pack');
+  assert.ok((await consumeMany(main, 'bulk', 59, 'magazine')).ok);
   state = (await main({ action: 'consume', items: [{ key: 'd', tpl: 'magazine' }] })).state;
-  assert.deepStrictEqual([state.singles, state.packs[0].used], [0, 120], 'single credit is used once packs are empty');
+  assert.deepStrictEqual([state.singles, state.packs[0].used], [9, 60], 'poster pack is used once packs are empty');
 
   const onlySingle = setup();
   const o = await onlySingle.main({ action: 'createOrder', kind: 'single' });
-  await onlySingle.main(notify(o.orderId, 129));
+  await onlySingle.main(notify(o.orderId, 990));
   assert.strictEqual((await onlySingle.main({ action: 'getEntitlement' })).state.bought, false, 'single does not make a member');
 });
 
@@ -267,20 +275,20 @@ test('api: lifetime purchase grants a monthly quota that resets, and can only be
   const { main, fake } = setup({}, () => clock);
   const order = await main({ action: 'createOrder', kind: 'lifetime' });
   assert.ok(order.ok);
-  assert.strictEqual(fake.calls.unifiedOrder[0].totalFee, 29900);
+  assert.strictEqual(fake.calls.unifiedOrder[0].totalFee, 9900);
   assert.strictEqual(fake.dump().orders[order.orderId].kind, 'lifetime');
-  await main(notify(order.orderId, 1490));
+  await main(notify(order.orderId, 1290));
   assert.strictEqual((await main({ action: 'getEntitlement' })).state.lifetime, null, 'wrong amount grants nothing');
-  await main(notify(order.orderId, 29900));
-  await main(notify(order.orderId, 29900));
+  await main(notify(order.orderId, 9900));
+  await main(notify(order.orderId, 9900));
   let state = (await main({ action: 'getEntitlement' })).state;
-  assert.deepStrictEqual(state.lifetime, { planId: 'lifetime', quota: 120, month: '2026-09', used: 0 });
+  assert.deepStrictEqual(state.lifetime, { planId: 'lifetime', quota: 100, month: '2026-09', used: 0 });
   assert.strictEqual(state.bought, true); assert.deepStrictEqual(state.packs, []);
 
   const again = await main({ action: 'createOrder', kind: 'lifetime' });
   assert.deepStrictEqual([again.ok, again.code], [false, 'already_owned']);
 
-  assert.ok((await consumeMany(main, 'a', 120, 'magazine')).ok);
+  assert.ok((await consumeMany(main, 'a', 100, 'magazine')).ok);
   assert.strictEqual((await consumeMany(main, 'b', 1, 'magazine')).code, 'insufficient', 'monthly limit reached');
   clock = Date.UTC(2026, 9, 1, 0, 30);
   state = (await consumeMany(main, 'c', 5, 'magazine')).state;
@@ -293,9 +301,9 @@ test('api: paying twice for a lifetime plan keeps the existing record', async ()
   const { main } = setup();
   const first = await main({ action: 'createOrder', kind: 'lifetime' });
   const second = await main({ action: 'createOrder', kind: 'lifetime' });
-  await main(notify(first.orderId, 29900));
+  await main(notify(first.orderId, 9900));
   await main({ action: 'consume', items: [{ key: 'x', tpl: 'magazine' }] });
-  await main(notify(second.orderId, 29900));
+  await main(notify(second.orderId, 9900));
   const st = (await main({ action: 'getEntitlement' })).state;
   assert.strictEqual(st.lifetime.used, 1, 'a duplicate payment does not reset the monthly usage');
   assert.strictEqual((await main({ action: 'syncOrder', orderId: second.orderId })).status, 'paid');
@@ -305,12 +313,12 @@ test('api: expired packs are ignored and cleared on the next purchase', async ()
   let clock = NOW;
   const { main, fake } = setup({}, () => clock);
   const first = await main({ action: 'createOrder', kind: 'plan', planId: 'month' });
-  await main(notify(first.orderId, 1490));
+  await main(notify(first.orderId, 1290));
   clock += 31 * serverQuota.DAY;
   assert.strictEqual((await main({ action: 'consume', items: [{ key: 'a', tpl: 'magazine' }] })).code, 'insufficient', 'expired pack does not count');
   assert.ok((await main({ action: 'consume', items: [{ key: 'b', tpl: 'polaroid' }] })).ok, 'the free template still works');
   const second = await main({ action: 'createOrder', kind: 'plan', planId: 'year' });
-  await main(notify(second.orderId, 10990));
+  await main(notify(second.orderId, 4990));
   const packs = fake.dump().users['openid-a'].packs;
   assert.deepStrictEqual(packs.map((p) => p.planId), ['year']);
   assert.ok((await main({ action: 'consume', items: [{ key: 'c', tpl: 'magazine' }] })).ok);
@@ -323,7 +331,7 @@ test('api: syncOrder and getEntitlement reconcile a lost notification via queryO
   assert.strictEqual(fake.calls.queryOrder[0].out_trade_no, orderId);
   assert.strictEqual(fake.calls.queryOrder[0].sub_mch_id, '1900000001');
 
-  fake.setQueryOrder(async () => ({ returnCode: 'SUCCESS', resultCode: 'SUCCESS', tradeState: 'SUCCESS', totalFee: 1490, transactionId: 'wx-q' }));
+  fake.setQueryOrder(async () => ({ returnCode: 'SUCCESS', resultCode: 'SUCCESS', tradeState: 'SUCCESS', totalFee: 1290, transactionId: 'wx-q' }));
   const ent = await main({ action: 'getEntitlement' });
   assert.strictEqual(ent.state.packs.length, 1, 'pending order is settled when the app asks for entitlements');
   assert.strictEqual((await main({ action: 'syncOrder', orderId })).status, 'paid');
@@ -400,10 +408,10 @@ test('client: pay() confirms with the server before reporting success', async ()
   await withCloudClient(fake, main, async (rp) => {
     assert.strictEqual(payment.isMock(), false);
     // 微信收银台成功后，回调到达云函数
-    rp.handler = async (params) => { await main(notify(params.package.replace('prepay_id=', ''), 1490)); };
-    const res = await payment.pay({ kind: 'plan', planId: 'month', title: '月度会员', priceText: '¥14.9' });
+    rp.handler = async (params) => { await main(notify(params.package.replace('prepay_id=', ''), 1290)); };
+    const res = await payment.pay({ kind: 'plan', planId: 'month', title: '月度会员', priceText: '¥12.9' });
     assert.strictEqual(res.ok, true); assert.ok(!res.pending);
-    assert.strictEqual(res.state.packs[0].quota, 120); assert.strictEqual(res.state.bought, true);
+    assert.strictEqual(res.state.packs[0].quota, 60); assert.strictEqual(res.state.bought, true);
     assert.deepStrictEqual((await payment.fetchEntitlement()).packs.length, 1);
   });
 });
@@ -414,11 +422,11 @@ test('client: pay() reports pending when the notification has not arrived, then 
   await withCloudClient(fake, main, async (rp) => {
     let orderId = '';
     rp.handler = (params) => { orderId = params.package.replace('prepay_id=', ''); };
-    const res = await payment.pay({ kind: 'single', title: '单张解锁', priceText: '¥1.29' });
+    const res = await payment.pay({ kind: 'single', title: '海报包', priceText: '¥9.9' });
     assert.deepStrictEqual([res.ok, res.pending, res.state], [true, true, undefined]);
     assert.strictEqual((await payment.fetchEntitlement()).singles, 0);
-    await main(notify(orderId, 129));
-    assert.strictEqual((await payment.fetchEntitlement()).singles, 1);
+    await main(notify(orderId, 990));
+    assert.strictEqual((await payment.fetchEntitlement()).singles, 10);
   });
 });
 
