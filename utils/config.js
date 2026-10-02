@@ -63,11 +63,11 @@ module.exports = {
   // 仅 payment.mode = 'cloud' 时生效；检测服务不可用时放行。时间单位为毫秒
   security: {
     enabled: true,
-    importWaitMs: 8000,
     saveWaitMs: 6000,
+    shareWaitMs: 1500,
     pollMs: 1200,
-    watchMs: 3000,
-    watchRounds: 30
+    watchMs: 2000,
+    watchRounds: 45
   },
   payment: {
     // 'mock'：开发调试，弹窗确认后直接视为支付成功（不产生任何扣款），权益只存本地

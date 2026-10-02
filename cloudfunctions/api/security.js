@@ -87,10 +87,11 @@ function createSecurity({ cloud, db, now }) {
       try {
         await checks.add({ data: { _id: traceId, openid, fileID: id, status: 'pending', createdAt: now() } });
       } catch (e) {
-        // 推送比这次写入更早到达：结果已经记下，副本现在可以删了
+        // 推送比这次写入更早到达：结果已经记下（但没有 openid），补上归属后副本现在可以删了
         const { data } = await checks.doc(traceId).get();
-        if (data.status !== 'pending') await removeFile(id);
-        else throw e;
+        if (data.status === 'pending') throw e;
+        await checks.doc(traceId).update({ data: { openid } });
+        await removeFile(id);
       }
       return { ok: true, traceId };
     } catch (e) {

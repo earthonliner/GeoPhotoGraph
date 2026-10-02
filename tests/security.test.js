@@ -74,6 +74,9 @@ test('图片：推送 risky；他人不能查询；推送先于登记到达时�
   assert.strictEqual(res.traceId, 'early');
   assert.deepStrictEqual(second.fake.calls.deleteFile, [FILE]);
   assert.strictEqual(second.fake.dump().seccheck.early.status, 'risky');
+  assert.strictEqual((await second.main({ action: 'imageResult', traceId: 'early' })).status, 'risky', '推送先到时上传者仍能查到结果');
+  second.fake.setOpenid('openid-b');
+  assert.strictEqual((await second.main({ action: 'imageResult', traceId: 'early' })).status, 'unknown');
 });
 
 test('图片：检测服务出错时放行并删除副本；非法 fileID 被拒绝；detail 里的 risky 也算违规', async () => {
