@@ -283,6 +283,10 @@
   text-align: center;
 }
 
+.stage-picker {
+  display: inline-block;
+}
+
 .stage-link {
   margin-left: 12rpx;
   font-size: 24rpx;
@@ -324,6 +328,29 @@
 
 .cell-value-tint {
   color: #007aff;
+}
+
+/* 照片缺少拍摄地点 / 日期时，「地点」页顶部的说明 */
+.place-tip {
+  margin-bottom: 20rpx;
+  padding: 18rpx 24rpx;
+  border-radius: 16rpx;
+  font-size: 24rpx;
+  line-height: 36rpx;
+  color: #0a4a8f;
+  background: rgba(0, 122, 255, 0.1);
+}
+
+.cell-hint {
+  flex: 1;
+  min-width: 0;
+  margin: 0 16rpx;
+  text-align: right;
+  font-size: 24rpx;
+  color: #8e8e93;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cell-input {
@@ -379,6 +406,14 @@
   color: #1c1c1e;
   background: rgba(118, 118, 128, 0.12);
   letter-spacing: 0.5rpx;
+}
+
+.cell-hint + .pill {
+  margin-left: 0;
+}
+
+.pill-tint {
+  color: #007aff;
 }
 
 /* 分段控件 */

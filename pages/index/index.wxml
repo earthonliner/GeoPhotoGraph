@@ -36,6 +36,12 @@
       <text>地图与地名会根据拍摄地点生成</text>
       <text class="link stage-link" bindtap="onPickLocation">选择拍摄地点</text>
     </view>
+    <view wx:elif="{{hasPhoto && dateMissing}}" class="stage-note">
+      <text>未读取到拍摄日期，海报暂用今天</text>
+      <picker class="stage-picker" mode="date" value="{{dateValue}}" start="1900-01-01" end="{{dateToday}}" bindchange="onDateChange">
+        <text class="link stage-link">选择日期</text>
+      </picker>
+    </view>
     <view wx:elif="{{hasPhoto && stageNote}}" class="stage-note">
       <text>{{stageNote}}</text>
       <text wx:if="{{currentLocked && canPurchase}}" class="link stage-link" bindtap="onOpenPaywall">解锁无水印高清图</text>
@@ -121,12 +127,20 @@
       </view>
 
       <view wx:if="{{panel === 'place'}}" class="panel-page">
+        <view wx:if="{{missingText}}" class="place-tip">{{missingText}}</view>
         <view class="group">
           <view class="cell" hover-class="cell-hover" bindtap="onPickLocation">
             <text class="cell-label">拍摄地点</text>
             <text class="cell-value {{hasLocation ? '' : 'cell-value-tint'}}">{{hasLocation ? coordText : '选择'}}</text>
             <view class="chevron"></view>
           </view>
+          <picker mode="date" value="{{dateValue}}" start="1900-01-01" end="{{dateToday}}" bindchange="onDateChange">
+            <view class="cell cell-line" hover-class="cell-hover">
+              <text class="cell-label">日期</text>
+              <text wx:if="{{dateMissing}}" class="cell-hint">未读取到，暂用今天</text>
+              <text class="pill {{dateMissing ? 'pill-tint' : ''}}">{{dateText || '选择日期'}}</text>
+            </view>
+          </picker>
           <view class="cell cell-line">
             <text class="cell-label">地名</text>
             <input
@@ -141,12 +155,6 @@
               bindconfirm="onPlaceCommit"
             />
           </view>
-          <picker mode="date" value="{{dateValue}}" start="1900-01-01" end="{{dateToday}}" bindchange="onDateChange">
-            <view class="cell cell-line" hover-class="cell-hover">
-              <text class="cell-label">日期</text>
-              <text class="pill">{{dateText || '选择日期'}}</text>
-            </view>
-          </picker>
           <view class="cell cell-line">
             <text class="cell-label">地名语言</text>
             <view class="seg seg-mini">
@@ -162,10 +170,10 @@
             </view>
           </view>
         </view>
-        <view wx:if="{{itemCount > 1 || placeManual || dateManual}}" class="section-links">
+        <view wx:if="{{itemCount > 1 || placeManual || (dateManual && dateKnown)}}" class="section-links">
           <text wx:if="{{itemCount > 1}}" class="link" bindtap="onApplyToAllMenu">应用到全部照片</text>
           <text wx:if="{{placeManual}}" class="link" bindtap="onPlaceReset">恢复自动地名</text>
-          <text wx:if="{{dateManual}}" class="link" bindtap="onDateReset">恢复拍摄日期</text>
+          <text wx:if="{{dateManual && dateKnown}}" class="link" bindtap="onDateReset">恢复拍摄日期</text>
         </view>
       </view>
 
@@ -431,6 +439,18 @@
               <view class="chevron"></view>
             </view>
           </view>
+          <block wx:if="{{sheetDate}}">
+            <text class="place-head">拍摄日期</text>
+            <view class="group">
+              <picker mode="date" value="{{dateValue}}" start="1900-01-01" end="{{dateToday}}" bindchange="onDateChange">
+                <view class="cell" hover-class="cell-hover">
+                  <text class="cell-label">日期</text>
+                  <text wx:if="{{dateMissing}}" class="cell-hint">未读取到，暂用今天</text>
+                  <text class="pill {{dateMissing ? 'pill-tint' : ''}}">{{dateText}}</text>
+                </view>
+              </picker>
+            </view>
+          </block>
           <block wx:if="{{recentList.length}}">
             <text class="place-head">最近使用</text>
             <view class="group">
