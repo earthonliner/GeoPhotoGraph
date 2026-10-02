@@ -785,7 +785,7 @@ test('隐私：拒绝隐私保护指引与拒绝相册权限分别提示', async
   assert.strictEqual(wx.calls.openSetting, 1);
 
   wx.chooseLocation = (o) => o.fail({ errno: 104, errMsg: 'chooseLocation:fail privacy permission is not authorized' });
-  await page.onPickLocation();
+  await page.onPlaceMap();
   assert.strictEqual(wx.calls.toast.pop(), '需同意隐私保护指引后才能地图选点');
 });
 
@@ -805,8 +805,10 @@ test('导入与导出：显示逐张进度，批量导出期间保持屏幕常�
   await page.onChoosePhoto();
   assert.deepStrictEqual(texts, ['读取照片 1/3…', '读取照片 2/3…', '读取照片 3/3…', '获取地名…']);
   assert.deepStrictEqual(page.items.map((it) => it.place), ['ZERMATT', 'UNKNOWN', 'KYOTO']);
-  assert.strictEqual(wx.calls.modal[0].title, '部分照片未读取到位置');
-  assert.ok(wx.calls.modal[0].content.includes('有 1 张照片'));
+  assert.deepStrictEqual(wx.calls.modal, [], '没有定位不算错误，不弹窗');
+  assert.ok(page.data.placeVisible);
+  assert.strictEqual(page.poster.photoPath, 'b.jpg');
+  page.onPlaceClose();
 
   texts.length = 0;
   await page.onSaveAll();
@@ -880,10 +882,10 @@ test('弹层：打开前用截图顶替原生 canvas，全部关闭后恢复并�
   assert.strictEqual(page.data.coverImage, 'snap-1.jpg');
   mapService.hasToken = () => true;
   await page.onPickLocation();
-  assert.ok(page.data.searchVisible);
+  assert.ok(page.data.placeVisible && page.data.canSearch);
   page.onPaywallClose();
-  assert.ok(page.data.previewCovered, '搜索面板仍打开');
-  page.onSearchClose();
+  assert.ok(page.data.previewCovered, '地点面板仍打开');
+  page.onPlaceClose();
   assert.ok(!page.data.previewCovered && page.data.coverImage === '');
   assert.strictEqual(page.renders, renders + 1);
 
@@ -901,9 +903,9 @@ test('批量编辑：地点和日期可统一应用到全部照片，“+” 可
   wx.store['geopics.membership'] = { invite: true };
   const page = createPage(wx);
   page.onLoad();
-  wx.modalConfirm = false;
   await page.onChoosePhoto();
-  wx.modalConfirm = true;
+  page.onPlaceClose();
+  page.onTapItem(tap({ id: page.items[0].id }));
   page.onPlaceInput({ detail: { value: 'TRIP' } });
   page.onDateChange({ detail: { value: '2021-05-06' } });
   wx.sheetTap = -1;
@@ -1009,28 +1011,36 @@ const mockMapPick = (wx, pick) => {
 EXIF['c.jpg'] = { hasGps: false, dateText: 'MAY 01, 2025', dateValue: '2025-05-01' };
 EXIF['d.jpg'] = { hasGps: false, dateText: 'MAY 02, 2025', dateValue: '2025-05-02' };
 
-test('读不到位置：导入后直接引导选择地点，选过的地点记入「最近」，下次一键选用', async () => {
+test('没有定位的照片：导入后打开拍摄地点面板，选过的地点记入「最近使用」，下次一键选用', async () => {
   const wx = createWx();
   wx.files = ['b.jpg'];
   mockMapPick(wx, { latitude: 39.9163, longitude: 116.3972, name: '故宫博物院', address: '北京市东城区景山前街4号' });
   const page = createPage(wx);
   page.onLoad();
   await page.onChoosePhoto();
-  const prompt = wx.calls.modal[0];
-  assert.strictEqual(prompt.title, '未读取到位置');
-  assert.ok(prompt.content.startsWith('这张照片没有读到定位信息，微信出于隐私保护'));
-  assert.deepStrictEqual([prompt.confirmText, prompt.cancelText], ['选择地点', '暂不']);
-  assert.strictEqual(wx.calls.sheet.length, 0, '没有最近地点、也没有全球搜索时直接打开地图选点');
+  assert.deepStrictEqual(wx.calls.modal, [], '不再弹出“未读取到位置”');
+  assert.ok(page.data.placeVisible && page.data.previewCovered);
+  assert.strictEqual(page.data.placeTitle, '这张照片在哪里拍的？');
+  assert.deepStrictEqual(
+    [page.data.fuzzyOn, page.data.canSearch, page.data.placeOthers, page.data.recentList],
+    [false, false, 0, []]
+  );
+  await page.onPlaceMap();
+  assert.ok(!page.data.placeVisible && !page.data.previewCovered);
   assert.strictEqual(wx.calls.chooseLocation, 1);
   assert.ok(page.poster.lat !== null && page.data.hasLocation);
   assert.strictEqual(page.poster.place, 'KYOTO');
   assert.deepStrictEqual(wx.store['geopics.recentPlaces'].map((p) => p.name), ['故宫博物院']);
+  await page.onPickLocation();
+  assert.strictEqual(page.data.placeTitle, '更换拍摄地点');
+  page.onPlaceClose();
 
-  // 下一张照片：最近地点排在最前，一次点按即可
+  // 下一张照片：面板里列出最近使用的地点，一次点按即可
   wx.files = ['c.jpg'];
-  wx.sheetTap = 0;
   await page.onChoosePhoto();
-  assert.deepStrictEqual(wx.calls.sheet.pop(), ['最近：故宫博物院', '地图选点（微信地图）']);
+  assert.deepStrictEqual(page.data.recentList, [{ name: '故宫博物院' }]);
+  await page.onPlaceRecent(tap({ index: 0 }));
+  assert.ok(!page.data.placeVisible);
   assert.strictEqual(wx.calls.chooseLocation, 1);
   assert.strictEqual(page.poster.photoPath, 'c.jpg');
   assert.ok(Math.abs(page.poster.lat - wx.store['geopics.recentPlaces'][0].lat) < 1e-9);
@@ -1046,11 +1056,21 @@ test('读不到位置：导入后直接引导选择地点，选过的地点记�
   again.rememberPlace(48.8584, 2.2945, '');
   assert.deepStrictEqual(wx.store['geopics.recentPlaces'].map((p) => p.name), ['48.8584° N  2.2945° E', '故宫', 'Kyoto']);
 
-  // 配置了 Mapbox 时：最近地点 + 全球搜索 + 微信地图
+  // 配置了 Mapbox 时：面板里可以搜索全球地点
   mapService.hasToken = () => true;
-  wx.sheetTap = -1;
+  const searchPlaces = mapService.searchPlaces;
+  mapService.searchPlaces = async () => [{ name: 'Zermatt', address: 'Valais, Switzerland', lat: 46.02, lon: 7.75 }];
   await again.onChoosePhoto();
-  assert.deepStrictEqual(wx.calls.sheet.pop().slice(-2), ['搜索地点（全球）', '地图选点（微信地图，仅国内）']);
+  assert.ok(again.data.placeVisible && again.data.canSearch);
+  assert.strictEqual(again.data.recentList.length, 3);
+  again.onSearchInput({ detail: { value: 'zer' } });
+  await again.runSearch('zer');
+  assert.strictEqual(again.data.searchResults.length, 1);
+  await again.onSelectResult(tap({ index: 0 }));
+  mapService.searchPlaces = searchPlaces;
+  assert.ok(!again.data.placeVisible);
+  assert.strictEqual(again.poster.place, 'ZERMATT');
+  assert.strictEqual(wx.store['geopics.recentPlaces'][0].name, 'Zermatt');
 
   wx.store['geopics.recentPlaces'] = 'broken';
   const broken = createPage(wx);
@@ -1058,63 +1078,61 @@ test('读不到位置：导入后直接引导选择地点，选过的地点记�
   assert.deepStrictEqual(broken.recentPlaces, []);
 });
 
-test('多张照片没有位置：选好一张后可一起用于其余照片，手动改过地名的不覆盖', async () => {
+test('多张照片：选好的地点默认一起用于其余没有地点的照片，有定位的不受影响', async () => {
   const wx = createWx();
-  wx.files = ['k.jpg', 'b.jpg', 'c.jpg', 'd.jpg'];
+  wx.files = ['k.jpg', 'b.jpg', 'c.jpg'];
   wx.store['geopics.membership'] = { invite: true };
   mockMapPick(wx, { latitude: 46.0207, longitude: 7.7491, name: 'Zermatt' });
   const page = createPage(wx);
   page.onLoad();
-  wx.modalConfirm = false;
   await page.onChoosePhoto();
-  const prompt = wx.calls.modal.pop();
-  assert.strictEqual(prompt.title, '部分照片未读取到位置');
-  assert.ok(prompt.content.includes('有 3 张照片') && prompt.content.includes('并可同时用于其他照片'));
-  assert.strictEqual(page.poster.photoPath, 'k.jpg', '选择“暂不”时停留在第一张');
+  assert.strictEqual(page.poster.photoPath, 'b.jpg', '切到第一张没有地点的照片');
+  assert.deepStrictEqual([page.data.placeOthers, page.data.placeApplyAll], [1, true]);
+  await page.onPlaceMap();
+  assert.deepStrictEqual(page.items.map((it) => it.place), ['KYOTO', 'ZERMATT', 'ZERMATT']);
+  assert.strictEqual(wx.calls.toast.pop(), '已用于 2 张照片');
+  assert.ok(page.data.list.every((it) => !it.noLoc));
 
-  const [k, b, c, d] = page.items;
+  // 整批都没有定位：一次选好全部
+  wx.files = ['b.jpg', 'c.jpg', 'd.jpg'];
+  await page.onChoosePhoto();
+  assert.strictEqual(page.poster.photoPath, 'b.jpg');
+  assert.strictEqual(page.data.placeOthers, 2);
+  await page.onPlaceRecent(tap({ index: 0 }));
+  assert.ok(page.items.every((it) => it.place === 'ZERMATT'));
+  assert.strictEqual(wx.calls.toast.pop(), '已用于 3 张照片');
+  assert.deepStrictEqual(wx.calls.modal, []);
+});
+
+test('多张照片：可关闭“同时用于其他照片”，手动改过地名的照片不计入也不覆盖', async () => {
+  const wx = createWx();
+  wx.files = ['b.jpg', 'c.jpg', 'd.jpg'];
+  wx.store['geopics.membership'] = { invite: true };
+  mockMapPick(wx, { latitude: 46.0207, longitude: 7.7491, name: 'Zermatt' });
+  const page = createPage(wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  page.onPlaceClose();
+  assert.strictEqual(page.data.list.filter((it) => it.noLoc).length, 3, '稍后再选时缩略图标出“选地点”');
+
+  const [b, c, d] = page.items;
   page.onTapItem(tap({ id: c.id }));
   page.onPlaceInput({ detail: { value: 'HOME' } });
   page.onTapItem(tap({ id: b.id }));
   await page.onPickLocation();
-  const offer = wx.calls.modal.pop();
-  assert.strictEqual(offer.title, '同时用于其他照片？');
-  assert.ok(offer.content.startsWith('还有 1 张照片没有位置'));
-  assert.deepStrictEqual([offer.confirmText, offer.cancelText], ['一起使用', '仅这张']);
-  assert.strictEqual(d.lat, null, '选择“仅这张”时其他照片不变');
+  assert.strictEqual(page.data.placeOthers, 1, '手动改过地名的不计入');
+  page.onPlaceApplyAll({ detail: { value: false } });
+  await page.onPlaceMap();
+  assert.strictEqual(b.place, 'ZERMATT');
+  assert.strictEqual(d.lat, null, '关闭开关时只用于当前照片');
+  assert.deepStrictEqual(wx.calls.toast, []);
 
-  wx.modalConfirm = true;
-  page.onTapItem(tap({ id: b.id }));
+  page.onTapItem(tap({ id: d.id }));
   await page.onPickLocation();
-  assert.strictEqual(d.lat, b.lat);
+  assert.deepStrictEqual([page.data.placeOthers, page.data.placeApplyAll], [0, true], '每次打开面板都恢复默认');
+  await page.onPlaceRecent(tap({ index: 0 }));
   assert.strictEqual(d.place, 'ZERMATT');
-  assert.strictEqual(wx.calls.toast.pop(), '已应用到 2 张');
-  assert.strictEqual(c.lat, null);
-  assert.strictEqual(c.place, 'HOME');
-  assert.strictEqual(k.place, 'KYOTO');
-  assert.ok(page.data.list.every((it) => it.id === c.id || !it.noLoc));
-});
-
-test('全部没有位置：确认后为当前照片选点，再一起用于其余照片', async () => {
-  const wx = createWx();
-  wx.files = ['k.jpg', 'b.jpg'];
-  wx.store['geopics.membership'] = { invite: true };
-  mockMapPick(wx, { latitude: 46.0207, longitude: 7.7491, name: 'Zermatt' });
-  const page = createPage(wx);
-  page.onLoad();
-  await page.onChoosePhoto();
-  assert.strictEqual(wx.calls.modal[0].title, '部分照片未读取到位置');
-  assert.strictEqual(page.poster.photoPath, 'b.jpg', '确认后切到第一张没有位置的照片');
-  assert.strictEqual(page.poster.place, 'ZERMATT');
-  assert.strictEqual(page.items[0].place, 'KYOTO', '有定位的照片不受影响');
-
-  wx.files = ['b.jpg', 'c.jpg'];
-  await page.onChoosePhoto();
-  const prompt = wx.calls.modal[1];
-  assert.strictEqual(prompt.title, '未读取到位置');
-  assert.ok(prompt.content.startsWith('这 2 张照片没有读到定位信息'));
-  assert.strictEqual(wx.calls.modal[2].title, '同时用于其他照片？');
-  assert.ok(page.items.every((it) => it.place === 'ZERMATT'));
+  assert.deepStrictEqual([c.lat, c.place], [null, 'HOME']);
 });
 
 const fuzzy = (wx, result) => {
@@ -1132,10 +1150,11 @@ test('使用当前所在城市：点按时获取一次模糊位置，作为地�
   fuzzy(wx, { latitude: 35.01, longitude: 135.77 });
   const page = createPage(wx);
   page.onLoad();
-  wx.modalConfirm = true;
-  wx.sheetTap = 0;
   await page.onChoosePhoto();
-  assert.deepStrictEqual(wx.calls.sheet.pop(), ['使用当前所在城市', '地图选点（微信地图）']);
+  assert.ok(page.data.placeVisible && page.data.fuzzyOn);
+  assert.deepStrictEqual(wx.calls.fuzzy, [], '打开面板时不获取位置');
+  await page.onPlaceCurrent();
+  assert.ok(!page.data.placeVisible);
   assert.deepStrictEqual(wx.calls.fuzzy, ['wgs84']);
   assert.strictEqual(page.poster.lat, 35.01);
   assert.strictEqual(page.poster.place, 'KYOTO');
@@ -1147,38 +1166,38 @@ test('使用当前所在城市：点按时获取一次模糊位置，作为地�
   const multi = createPage(wx);
   multi.onLoad();
   await multi.onChoosePhoto();
+  await multi.onPlaceCurrent();
   assert.ok(multi.items.every((it) => it.place === 'KYOTO'));
 });
 
 test('使用当前所在城市：基础库不支持时不出现；失败时说明原因并引导去设置', async () => {
   const wx = createWx();
   wx.files = ['b.jpg'];
-  wx.modalConfirm = false;
   const page = createPage(wx);
   page.onLoad();
   await page.onChoosePhoto();
-  wx.sheetTap = -1;
-  await page.onPickLocation();
   assert.strictEqual(typeof wx.getFuzzyLocation, 'undefined');
-  assert.strictEqual(wx.calls.sheet.length, 0, '无接口且无最近地点时直接打开地图选点');
+  assert.strictEqual(page.data.fuzzyOn, false);
+  page.onPlaceClose();
 
   fuzzy(wx, { fail: { errMsg: 'getFuzzyLocation:fail auth deny' } });
-  wx.sheetTap = 0;
-  wx.modalConfirm = true;
   await page.onPickLocation();
+  assert.strictEqual(page.data.fuzzyOn, true);
+  wx.modalConfirm = true;
+  await page.onPlaceCurrent();
   const denied = wx.calls.modal.pop();
   assert.strictEqual(denied.title, '无法获取当前位置');
   assert.ok(denied.content.includes('错误信息：getFuzzyLocation:fail auth deny'));
   assert.strictEqual(denied.confirmText, '去设置');
   assert.strictEqual(wx.calls.openSetting, 1);
   wx.modalConfirm = false;
-  await page.onPickLocation();
+  await page.onPlaceCurrent();
   assert.strictEqual(wx.calls.openSetting, 1, '选“取消”不跳转设置');
 
   // 系统层面没有位置权限 / 定位开关关闭，同样引导去设置
   for (const errMsg of ['getFuzzyLocation:fail system permission denied', 'getFuzzyLocation:fail:ERROR_NOCELL&WIFI_LOCATIONSWITCHOFF']) {
     fuzzy(wx, { fail: { errMsg } });
-    await page.onPickLocation();
+    await page.onPlaceCurrent();
     const m = wx.calls.modal.pop();
     assert.strictEqual(m.confirmText, '去设置', errMsg);
     assert.ok(m.content.includes(errMsg));
@@ -1187,21 +1206,21 @@ test('使用当前所在城市：基础库不支持时不出现；失败时说�
   fuzzy(wx, { fail: { errMsg: 'getFuzzyLocation:fail cancel' } });
   const toasts = wx.calls.toast.length;
   const modals = wx.calls.modal.length;
-  await page.onPickLocation();
+  await page.onPlaceCurrent();
   assert.strictEqual(wx.calls.toast.length, toasts, '取消不提示');
   assert.strictEqual(wx.calls.modal.length, modals);
   fuzzy(wx, { fail: { errno: 104, errMsg: 'getFuzzyLocation:fail privacy permission is not authorized' } });
-  await page.onPickLocation();
+  await page.onPlaceCurrent();
   assert.strictEqual(wx.calls.toast.pop(), '需同意隐私保护指引后才能获取位置');
 
   // 其他原因：显示微信返回的错误信息，不再笼统地说“请开启定位”
   fuzzy(wx, { fail: { errMsg: 'getFuzzyLocation:fail something unexpected' } });
-  await page.onPickLocation();
+  await page.onPlaceCurrent();
   const other = wx.calls.modal.pop();
   assert.deepStrictEqual([other.confirmText, other.showCancel], ['知道了', false]);
   assert.ok(other.content.includes('错误信息：getFuzzyLocation:fail something unexpected'));
   fuzzy(wx, { fail: { errMsg: 'getFuzzyLocation:fail the api need to be declared in the requiredPrivateInfos field in app.json' } });
-  await page.onPickLocation();
+  await page.onPlaceCurrent();
   assert.ok(wx.calls.modal.pop().content.startsWith('当前版本暂时无法使用此功能'));
   assert.strictEqual(page.poster.lat, null);
 });

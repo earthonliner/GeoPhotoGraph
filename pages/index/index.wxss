@@ -431,8 +431,8 @@
   white-space: nowrap;
 }
 
-.thumb-badge-warn {
-  background: #ff9500;
+.thumb-badge-tint {
+  background: #007aff;
 }
 
 /* 勾选 / 删除：可见图形小，点击热区放大 */
@@ -898,23 +898,65 @@
   color: #ff3b30;
 }
 
-/* 地点搜索：大尺寸面板，顶部对齐，避免被键盘遮挡 */
-.sheet-search {
-  top: 24rpx;
-  max-height: none;
-  padding: 0;
-  background: #fff;
+/* 拍摄地点面板：内容高度自适应；可搜索时留出结果区，输入框靠上，不会被键盘挡住 */
+.sheet-place-search {
+  min-height: 64vh;
 }
 
-.search-bar {
+.sheet-place .sheet-body {
+  flex: 0 1 auto;
+}
+
+.sheet-place-search .sheet-body {
+  flex: 1 1 auto;
+}
+
+.place-sub {
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  padding: 20rpx 32rpx 16rpx;
+  display: block;
+  padding: 0 8rpx 24rpx;
+  text-align: center;
+  font-size: 26rpx;
+  line-height: 36rpx;
+  color: #8e8e93;
+}
+
+.place-search {
+  flex-shrink: 0;
+  margin-bottom: 24rpx;
+}
+
+.place-action {
+  font-weight: 400;
+  color: #007aff;
+}
+
+.place-head {
+  display: block;
+  padding: 40rpx 32rpx 14rpx;
+  font-size: 26rpx;
+  line-height: 36rpx;
+  color: #6d6d72;
+}
+
+.place-recent {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.place-all {
+  flex-shrink: 0;
+  margin-top: 32rpx;
+}
+
+.place-foot {
+  flex-shrink: 0;
 }
 
 .search-field {
-  flex: 1;
   display: flex;
   align-items: center;
   height: 72rpx;
@@ -952,18 +994,6 @@
   height: 72rpx;
   font-size: 32rpx;
   color: #1c1c1e;
-}
-
-.search-cancel {
-  flex-shrink: 0;
-  margin-left: 24rpx;
-  font-size: 32rpx;
-  color: #007aff;
-}
-
-.search-list {
-  flex: 1;
-  height: 0;
 }
 
 .result {
