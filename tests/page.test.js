@@ -94,15 +94,15 @@ function cloudSetup(overrides, virtual) {
   return env;
 }
 
-test('预览：首屏放得下带底栏的整张海报，底栏开关只改高度并记住偏好', () => {
+test('预览：一屏同时放得下带底栏的整张海报与编辑面板，底栏开关只改高度并记住偏好', () => {
   const wx = createWx();
   const page = createPage(wx);
   page.onLoad();
-  assert.strictEqual(page.cssSize.w, 284);
+  assert.strictEqual(page.cssSize.w, 226);
   assert.strictEqual(page.data.exportSize, '1200 × 1792');
   page.preview = { width: 0, height: 0 };
   page.onToggleFooter({ detail: { value: false } });
-  assert.strictEqual(page.cssSize.w, 284);
+  assert.strictEqual(page.cssSize.w, 226);
   assert.strictEqual(page.data.exportSize, '1200 × 1600');
   assert.strictEqual(page.preview.height, Math.round(page.cssSize.h * page.dpr));
   assert.strictEqual(page.data.canvasStyle, `width:${page.cssSize.w}px;height:${page.cssSize.h}px;`);
@@ -113,7 +113,33 @@ test('预览：首屏放得下带底栏的整张海报，底栏开关只改高�
 
   const se = createPage(createWx({ getWindowInfo: () => ({ windowWidth: 375, windowHeight: 603, screenHeight: 667, safeArea: { bottom: 667 }, pixelRatio: 2 }) }));
   se.onLoad();
-  assert.strictEqual(se.cssSize.w, 226);
+  assert.strictEqual(se.cssSize.w, 181);
+});
+
+test('编辑面板：选好照片后分页切换选项，预览始终在上方；取景页只对有取景区的模板出现', async () => {
+  const wx = createWx();
+  const page = createPage(wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  const ids = () => page.data.panels.map((x) => x.id);
+  assert.strictEqual(page.data.templateId, 'polaroid');
+  assert.strictEqual(page.data.panel, 'template');
+  assert.deepStrictEqual(ids(), ['template', 'photos', 'place', 'map', 'opacity', 'poster'], '拍立得没有取景区');
+
+  page.onTapPanel(tap({ id: 'map' }));
+  assert.strictEqual(page.data.panel, 'map');
+  page.onTapPanel(tap({ id: 'crop' }));
+  assert.strictEqual(page.data.panel, 'map', '不存在的分页点不开');
+
+  // 换模板不打断正在调整的分页
+  await page.onTapTemplate(tap({ id: 'split' }));
+  assert.strictEqual(page.data.panel, 'map');
+  assert.deepStrictEqual(ids(), ['template', 'photos', 'place', 'crop', 'map', 'opacity', 'poster']);
+  page.onTapPanel(tap({ id: 'crop' }));
+  assert.strictEqual(page.data.panel, 'crop');
+  await page.onTapTemplate(tap({ id: 'gallery' }));
+  assert.ok(!ids().includes('crop'));
+  assert.strictEqual(page.data.panel, 'template', '取景页消失时回到模板页');
 });
 
 test('免费版：只有拍立得每月 10 张免费，其余模板带水印且不能下载', async () => {

@@ -1,4 +1,4 @@
-<view class="page">
+<view class="page {{hasPhoto ? 'page-edit' : ''}}">
   <view class="header">
     <view class="header-row">
       <view class="brand">
@@ -11,26 +11,6 @@
       </view>
     </view>
     <text wx:if="{{!hasPhoto}}" class="header-sub">一张照片，一个地点，设计你的地图海报</text>
-  </view>
-
-  <view wx:if="{{hasPhoto}}" class="tpl-bar">
-    <view class="seg">
-      <view
-        wx:for="{{categories}}"
-        wx:key="id"
-        class="seg-item {{item.id === catId ? 'seg-on' : ''}}"
-        data-id="{{item.id}}"
-        bindtap="onTapCategory"
-      >{{item.name}}</view>
-    </view>
-    <scroll-view scroll-x enable-flex class="chips bleed" scroll-with-animation scroll-into-view="tab-{{templateId}}">
-      <view class="bleed-pad"></view>
-      <block wx:for="{{visibleTemplates}}" wx:key="id">
-        <view id="tab-{{item.id}}" class="bleed-anchor"></view>
-        <view class="chip {{item.id === templateId ? 'chip-on' : ''}}" data-id="{{item.id}}" bindtap="onTapTemplate">{{item.name}}</view>
-      </block>
-      <view class="bleed-end"></view>
-    </scroll-view>
   </view>
 
   <view class="stage">
@@ -65,219 +45,244 @@
     <text wx:if="{{tokenMissing}}" class="stage-note stage-warn">开发提示：未配置 Mapbox Token（utils/config.local.js），当前使用本地简约底图，地名不可用</text>
   </view>
 
-  <block wx:if="{{hasPhoto}}">
-    <view class="section">
-      <view class="section-head">
-        <text class="section-title">照片 {{itemCount}}/{{maxBatch}}</text>
-        <text wx:if="{{itemCount > 1}}" class="section-action" bindtap="onToggleSelectAll">{{selectedCount === itemCount ? '取消全选' : '全选'}}</text>
-      </view>
-      <scroll-view scroll-x enable-flex class="strip bleed" scroll-with-animation scroll-into-view="thumb-{{currentId}}">
-        <view class="bleed-pad"></view>
-        <block wx:for="{{list}}" wx:key="id">
-          <view id="thumb-{{item.id}}" class="bleed-anchor"></view>
-          <view class="thumb {{item.current ? 'thumb-current' : ''}}" data-id="{{item.id}}" bindtap="onTapItem">
-            <image class="thumb-img" src="{{item.path}}" mode="aspectFill" />
-            <view wx:if="{{batchMode === 'random' && itemCount > 1}}" class="thumb-scrim">
-              <text class="thumb-tpl">{{item.tplName}}</text>
-            </view>
-            <text wx:if="{{item.noLoc}}" class="thumb-badge thumb-badge-tint">选地点</text>
-            <text wx:elif="{{item.locked && lockBadges}}" class="thumb-badge">水印</text>
-            <view wx:if="{{itemCount > 1}}" class="thumb-hit thumb-hit-left" data-id="{{item.id}}" catchtap="onToggleSelect">
-              <view class="check {{item.selected ? 'check-on' : ''}}"></view>
-            </view>
-            <view wx:if="{{item.current}}" class="thumb-hit thumb-hit-right" data-id="{{item.id}}" catchtap="onRemoveItem">
-              <view class="remove"></view>
-            </view>
-          </view>
-        </block>
-        <view class="thumb thumb-add" hover-class="tap-dim" bindtap="onTapAddTile">
-          <view class="plus"></view>
-        </view>
-        <view class="bleed-end"></view>
-      </scroll-view>
-      <view wx:if="{{itemCount > 1}}" class="strip-tools">
-        <view class="seg seg-mode">
-          <view class="seg-item {{batchMode === 'unique' ? 'seg-on' : ''}}" data-mode="unique" bindtap="onBatchModeChange">统一模板</view>
-          <view class="seg-item {{batchMode === 'random' ? 'seg-on' : ''}}" data-mode="random" bindtap="onBatchModeChange">随机模板</view>
-        </view>
-        <text wx:if="{{batchMode === 'random'}}" class="link" bindtap="onReshuffle">重新随机</text>
-      </view>
-      <text wx:if="{{itemCount === 1 && batchOk}}" class="section-foot">点按 + 可继续添加，最多 {{maxBatch}} 张，一次生成多张海报。</text>
-      <text wx:elif="{{itemCount === 1}}" class="section-foot">{{canPurchase ? '批量导入与批量下载为会员功能：月度、年度、买断会员和邀请码可用，海报包不含批量。' : '批量导入与批量下载为会员功能。'}}<text class="link" bindtap="onOpenPaywall">{{canPurchase ? '查看会员权益' : '会员与额度'}}</text></text>
-      <text wx:elif="{{batchMode === 'unique'}}" class="section-foot">所有照片使用同一模板。点按缩略图编辑单张，左上角勾选的照片用于批量下载。</text>
-      <text wx:else class="section-foot">每张照片在当前分类内随机分配模板，点按缩略图可单独更换。左上角勾选的照片用于批量下载。</text>
+  <view wx:if="{{hasPhoto}}" class="editor">
+    <view class="tabs">
+      <view
+        wx:for="{{panels}}"
+        wx:key="id"
+        class="tab {{item.id === panel ? 'tab-on' : ''}}"
+        data-id="{{item.id}}"
+        bindtap="onTapPanel"
+      >{{item.name}}</view>
     </view>
-
-    <view class="section">
-      <view class="section-head">
-        <text class="section-title">地点与日期</text>
-      </view>
-      <view class="group">
-        <view class="cell" hover-class="cell-hover" bindtap="onPickLocation">
-          <text class="cell-label">拍摄地点</text>
-          <text class="cell-value {{hasLocation ? '' : 'cell-value-tint'}}">{{hasLocation ? coordText : '选择'}}</text>
-          <view class="chevron"></view>
-        </view>
-        <view class="cell cell-line">
-          <text class="cell-label">地名</text>
-          <input
-            class="cell-input"
-            value="{{place}}"
-            maxlength="32"
-            placeholder="输入地名"
-            placeholder-class="ph"
-            confirm-type="done"
-            bindinput="onPlaceInput"
-            bindblur="onPlaceCommit"
-            bindconfirm="onPlaceCommit"
-          />
-        </view>
-        <picker mode="date" value="{{dateValue}}" start="1900-01-01" end="{{dateToday}}" bindchange="onDateChange">
-          <view class="cell cell-line" hover-class="cell-hover">
-            <text class="cell-label">日期</text>
-            <text class="pill">{{dateText || '选择日期'}}</text>
-          </view>
-        </picker>
-        <view class="cell cell-line">
-          <text class="cell-label">地名语言</text>
-          <view class="seg seg-mini">
-            <view class="seg-item {{placeLang === 'en' ? 'seg-on' : ''}}" data-lang="en" bindtap="onPlaceLangChange">English</view>
-            <view class="seg-item {{placeLang === 'zh' ? 'seg-on' : ''}}" data-lang="zh" bindtap="onPlaceLangChange">中文</view>
-          </view>
-        </view>
-        <view class="cell cell-line">
-          <text class="cell-label">地名范围</text>
-          <view class="seg seg-mini">
-            <view class="seg-item {{placeLevel === 'city' ? 'seg-on' : ''}}" data-level="city" bindtap="onPlaceLevelChange">城市</view>
-            <view class="seg-item {{placeLevel === 'detail' ? 'seg-on' : ''}}" data-level="detail" bindtap="onPlaceLevelChange">含区域</view>
-          </view>
-        </view>
-      </view>
-      <view wx:if="{{itemCount > 1 || placeManual || dateManual}}" class="section-links">
-        <text wx:if="{{itemCount > 1}}" class="link" bindtap="onApplyToAllMenu">应用到全部照片</text>
-        <text wx:if="{{placeManual}}" class="link" bindtap="onPlaceReset">恢复自动地名</text>
-        <text wx:if="{{dateManual}}" class="link" bindtap="onDateReset">恢复拍摄日期</text>
-      </view>
-    </view>
-
-    <view wx:if="{{cropEnabled}}" class="section">
-      <view class="section-head">
-        <text class="section-title">照片取景</text>
-        <text class="section-action" bindtap="onResetCrop">重置</text>
-      </view>
-      <view class="group">
-        <view class="cell">
-          <text class="cell-label cell-label-short">缩放</text>
-          <slider class="cell-slider" min="100" max="400" step="1" value="{{cropZoom}}" block-size="24" activeColor="#007AFF" backgroundColor="#E5E5EA" data-key="cropZoom" bindchanging="onCropSlider" bindchange="onCropSlider" />
-          <text class="cell-num">{{cropZoom}}%</text>
-        </view>
-        <view class="cell cell-line">
-          <text class="cell-label cell-label-short">左右</text>
-          <slider class="cell-slider" min="-100" max="100" step="1" value="{{cropX}}" block-size="24" activeColor="#E5E5EA" backgroundColor="#E5E5EA" data-key="cropX" bindchanging="onCropSlider" bindchange="onCropSlider" />
-          <text class="cell-num">{{cropX}}</text>
-        </view>
-        <view class="cell cell-line">
-          <text class="cell-label cell-label-short">上下</text>
-          <slider class="cell-slider" min="-100" max="100" step="1" value="{{cropY}}" block-size="24" activeColor="#E5E5EA" backgroundColor="#E5E5EA" data-key="cropY" bindchanging="onCropSlider" bindchange="onCropSlider" />
-          <text class="cell-num">{{cropY}}</text>
-        </view>
-      </view>
-      <text class="section-foot">也可以直接在预览图的照片区域拖动平移、双指缩放。</text>
-    </view>
-
-    <view class="section">
-      <view class="section-head">
-        <text class="section-title">地图</text>
-        <text wx:if="{{mapColorId === 'custom'}}" class="section-meta">{{customHex}}</text>
-      </view>
-      <view class="group">
-        <scroll-view scroll-x enable-flex class="swatches">
-          <view class="swatch-pad"></view>
+    <scroll-view scroll-y class="panel bleed">
+      <view wx:if="{{panel === 'template'}}" class="panel-page">
+        <view class="seg">
           <view
-            wx:for="{{themes}}"
+            wx:for="{{categories}}"
             wx:key="id"
-            class="swatch-item"
+            class="seg-item {{item.id === catId ? 'seg-on' : ''}}"
             data-id="{{item.id}}"
-            bindtap="onTapTheme"
-          >
-            <view
-              class="swatch {{item.id === mapColorId ? 'swatch-on' : ''}} {{item.id === 'custom' ? 'swatch-custom' : ''}}"
-              style="{{item.id === 'custom' ? '' : 'background:' + item.tint + ';'}}"
-            >
-              <view wx:if="{{item.id === 'custom'}}" class="swatch-core" style="background:{{item.tint}};"></view>
-            </view>
-            <text class="swatch-name {{item.id === mapColorId ? 'swatch-name-on' : ''}}">{{item.name}}</text>
-          </view>
-          <view class="swatch-pad"></view>
+            bindtap="onTapCategory"
+          >{{item.name}}</view>
+        </view>
+        <scroll-view scroll-x enable-flex class="chips bleed" scroll-with-animation scroll-into-view="tab-{{templateId}}">
+          <view class="bleed-pad"></view>
+          <block wx:for="{{visibleTemplates}}" wx:key="id">
+            <view id="tab-{{item.id}}" class="bleed-anchor"></view>
+            <view class="chip {{item.id === templateId ? 'chip-on' : ''}}" data-id="{{item.id}}" bindtap="onTapTemplate">{{item.name}}</view>
+          </block>
+          <view class="bleed-end"></view>
         </scroll-view>
-        <view wx:if="{{mapColorId === 'custom'}}" class="color-picker cell-line">
-          <view id="colorPad" class="pad" style="background-color:{{hueColor}};" bindtouchstart="onPadStart" catchtouchmove="onPadMove">
-            <view class="pad-cursor" style="{{padCursor}}"></view>
+        <view wx:if="{{itemCount > 1}}" class="strip-tools">
+          <view class="seg seg-mode">
+            <view class="seg-item {{batchMode === 'unique' ? 'seg-on' : ''}}" data-mode="unique" bindtap="onBatchModeChange">统一模板</view>
+            <view class="seg-item {{batchMode === 'random' ? 'seg-on' : ''}}" data-mode="random" bindtap="onBatchModeChange">随机模板</view>
           </view>
-          <view id="hueBar" class="hue" bindtouchstart="onHueStart" catchtouchmove="onHueMove">
-            <view class="hue-cursor" style="{{hueCursor}}background:{{hueColor}};"></view>
+          <text wx:if="{{batchMode === 'random'}}" class="link" bindtap="onReshuffle">重新随机</text>
+        </view>
+      </view>
+
+      <view wx:if="{{panel === 'photos'}}" class="panel-page">
+        <view class="section-head panel-head">
+          <text class="section-title">照片 {{itemCount}}/{{maxBatch}}</text>
+          <text wx:if="{{itemCount > 1}}" class="section-action" bindtap="onToggleSelectAll">{{selectedCount === itemCount ? '取消全选' : '全选'}}</text>
+        </view>
+        <scroll-view scroll-x enable-flex class="strip bleed" scroll-with-animation scroll-into-view="thumb-{{currentId}}">
+          <view class="bleed-pad"></view>
+          <block wx:for="{{list}}" wx:key="id">
+            <view id="thumb-{{item.id}}" class="bleed-anchor"></view>
+            <view class="thumb {{item.current ? 'thumb-current' : ''}}" data-id="{{item.id}}" bindtap="onTapItem">
+              <image class="thumb-img" src="{{item.path}}" mode="aspectFill" />
+              <view wx:if="{{batchMode === 'random' && itemCount > 1}}" class="thumb-scrim">
+                <text class="thumb-tpl">{{item.tplName}}</text>
+              </view>
+              <text wx:if="{{item.noLoc}}" class="thumb-badge thumb-badge-tint">选地点</text>
+              <text wx:elif="{{item.locked && lockBadges}}" class="thumb-badge">水印</text>
+              <view wx:if="{{itemCount > 1}}" class="thumb-hit thumb-hit-left" data-id="{{item.id}}" catchtap="onToggleSelect">
+                <view class="check {{item.selected ? 'check-on' : ''}}"></view>
+              </view>
+              <view wx:if="{{item.current}}" class="thumb-hit thumb-hit-right" data-id="{{item.id}}" catchtap="onRemoveItem">
+                <view class="remove"></view>
+              </view>
+            </view>
+          </block>
+          <view class="thumb thumb-add" hover-class="tap-dim" bindtap="onTapAddTile">
+            <view class="plus"></view>
+          </view>
+          <view class="bleed-end"></view>
+        </scroll-view>
+        <text wx:if="{{itemCount === 1 && batchOk}}" class="section-foot">点按 + 可继续添加，最多 {{maxBatch}} 张，一次生成多张海报。</text>
+        <text wx:elif="{{itemCount === 1}}" class="section-foot">{{canPurchase ? '批量导入与批量下载为会员功能：月度、年度、买断会员和邀请码可用，海报包不含批量。' : '批量导入与批量下载为会员功能。'}}<text class="link" bindtap="onOpenPaywall">{{canPurchase ? '查看会员权益' : '会员与额度'}}</text></text>
+        <text wx:elif="{{batchMode === 'unique'}}" class="section-foot">所有照片使用同一模板。点按缩略图编辑单张，左上角勾选的照片用于批量下载。</text>
+        <text wx:else class="section-foot">每张照片在当前分类内随机分配模板，点按缩略图可单独更换。左上角勾选的照片用于批量下载。</text>
+      </view>
+
+      <view wx:if="{{panel === 'place'}}" class="panel-page">
+        <view class="group">
+          <view class="cell" hover-class="cell-hover" bindtap="onPickLocation">
+            <text class="cell-label">拍摄地点</text>
+            <text class="cell-value {{hasLocation ? '' : 'cell-value-tint'}}">{{hasLocation ? coordText : '选择'}}</text>
+            <view class="chevron"></view>
+          </view>
+          <view class="cell cell-line">
+            <text class="cell-label">地名</text>
+            <input
+              class="cell-input"
+              value="{{place}}"
+              maxlength="32"
+              placeholder="输入地名"
+              placeholder-class="ph"
+              confirm-type="done"
+              bindinput="onPlaceInput"
+              bindblur="onPlaceCommit"
+              bindconfirm="onPlaceCommit"
+            />
+          </view>
+          <picker mode="date" value="{{dateValue}}" start="1900-01-01" end="{{dateToday}}" bindchange="onDateChange">
+            <view class="cell cell-line" hover-class="cell-hover">
+              <text class="cell-label">日期</text>
+              <text class="pill">{{dateText || '选择日期'}}</text>
+            </view>
+          </picker>
+          <view class="cell cell-line">
+            <text class="cell-label">地名语言</text>
+            <view class="seg seg-mini">
+              <view class="seg-item {{placeLang === 'en' ? 'seg-on' : ''}}" data-lang="en" bindtap="onPlaceLangChange">English</view>
+              <view class="seg-item {{placeLang === 'zh' ? 'seg-on' : ''}}" data-lang="zh" bindtap="onPlaceLangChange">中文</view>
+            </view>
+          </view>
+          <view class="cell cell-line">
+            <text class="cell-label">地名范围</text>
+            <view class="seg seg-mini">
+              <view class="seg-item {{placeLevel === 'city' ? 'seg-on' : ''}}" data-level="city" bindtap="onPlaceLevelChange">城市</view>
+              <view class="seg-item {{placeLevel === 'detail' ? 'seg-on' : ''}}" data-level="detail" bindtap="onPlaceLevelChange">含区域</view>
+            </view>
           </view>
         </view>
-        <view wx:if="{{mapColorId === 'custom'}}" class="cell cell-line">
-          <text class="cell-label">色值</text>
-          <input
-            class="cell-input cell-input-hex"
-            value="{{customHexText}}"
-            maxlength="7"
-            placeholder="#E8DFD0"
-            placeholder-class="ph"
-            bindinput="onCustomHexInput"
-          />
-        </view>
-        <view class="cell cell-line">
-          <text class="cell-label cell-label-short">缩放</text>
-          <slider class="cell-slider" min="4" max="16" step="1" value="{{zoom}}" block-size="24" activeColor="#007AFF" backgroundColor="#E5E5EA" bindchanging="onZoomChanging" bindchange="onZoomChange" />
-          <text class="cell-num">{{zoom}}</text>
+        <view wx:if="{{itemCount > 1 || placeManual || dateManual}}" class="section-links">
+          <text wx:if="{{itemCount > 1}}" class="link" bindtap="onApplyToAllMenu">应用到全部照片</text>
+          <text wx:if="{{placeManual}}" class="link" bindtap="onPlaceReset">恢复自动地名</text>
+          <text wx:if="{{dateManual}}" class="link" bindtap="onDateReset">恢复拍摄日期</text>
         </view>
       </view>
-      <text class="section-foot">缩放级别越大，地图越接近街道细节。</text>
-    </view>
 
-    <view class="section">
-      <view class="section-head">
-        <text class="section-title">不透明度</text>
-        <text class="section-action" bindtap="onResetOpacity">重置</text>
+      <view wx:if="{{panel === 'crop'}}" class="panel-page">
+        <view class="section-head panel-head">
+          <text class="section-title">照片取景</text>
+          <text class="section-action" bindtap="onResetCrop">重置</text>
+        </view>
+        <view class="group">
+          <view class="cell">
+            <text class="cell-label cell-label-short">缩放</text>
+            <slider class="cell-slider" min="100" max="400" step="1" value="{{cropZoom}}" block-size="24" activeColor="#007AFF" backgroundColor="#E5E5EA" data-key="cropZoom" bindchanging="onCropSlider" bindchange="onCropSlider" />
+            <text class="cell-num">{{cropZoom}}%</text>
+          </view>
+          <view class="cell cell-line">
+            <text class="cell-label cell-label-short">左右</text>
+            <slider class="cell-slider" min="-100" max="100" step="1" value="{{cropX}}" block-size="24" activeColor="#E5E5EA" backgroundColor="#E5E5EA" data-key="cropX" bindchanging="onCropSlider" bindchange="onCropSlider" />
+            <text class="cell-num">{{cropX}}</text>
+          </view>
+          <view class="cell cell-line">
+            <text class="cell-label cell-label-short">上下</text>
+            <slider class="cell-slider" min="-100" max="100" step="1" value="{{cropY}}" block-size="24" activeColor="#E5E5EA" backgroundColor="#E5E5EA" data-key="cropY" bindchanging="onCropSlider" bindchange="onCropSlider" />
+            <text class="cell-num">{{cropY}}</text>
+          </view>
+        </view>
+        <text class="section-foot">也可以直接在预览图的照片区域拖动平移、双指缩放。</text>
       </view>
-      <view class="group">
-        <view class="cell">
-          <text class="cell-label cell-label-short">地图</text>
-          <slider class="cell-slider" min="0" max="100" step="1" value="{{mapOpacity}}" block-size="24" activeColor="#007AFF" backgroundColor="#E5E5EA" data-key="mapOpacity" bindchanging="onOpacityChanging" bindchange="onOpacityChange" />
-          <text class="cell-num">{{mapOpacity}}%</text>
-        </view>
-        <view class="cell cell-line">
-          <text class="cell-label cell-label-short">照片</text>
-          <slider class="cell-slider" min="0" max="100" step="1" value="{{photoOpacity}}" block-size="24" activeColor="#007AFF" backgroundColor="#E5E5EA" data-key="photoOpacity" bindchanging="onOpacityChanging" bindchange="onOpacityChange" />
-          <text class="cell-num">{{photoOpacity}}%</text>
-        </view>
-        <view class="cell cell-line">
-          <text class="cell-label cell-label-short">文字</text>
-          <slider class="cell-slider" min="0" max="100" step="1" value="{{textOpacity}}" block-size="24" activeColor="#007AFF" backgroundColor="#E5E5EA" data-key="textOpacity" bindchanging="onOpacityChanging" bindchange="onOpacityChange" />
-          <text class="cell-num">{{textOpacity}}%</text>
-        </view>
-      </view>
-    </view>
 
-    <view class="section">
-      <view class="section-head">
-        <text class="section-title">海报</text>
-      </view>
-      <view class="group">
-        <view class="cell">
-          <text class="cell-label">品牌底栏</text>
-          <switch class="cell-switch" checked="{{footerOn}}" color="#34C759" bindchange="onToggleFooter" />
+      <view wx:if="{{panel === 'map'}}" class="panel-page">
+        <view class="section-head panel-head">
+          <text class="section-title">地图配色</text>
+          <text wx:if="{{mapColorId === 'custom'}}" class="section-meta">{{customHex}}</text>
         </view>
-        <view class="cell cell-line">
-          <text class="cell-label">导出尺寸</text>
-          <text class="cell-value">{{exportSize}} px</text>
+        <view class="group">
+          <scroll-view scroll-x enable-flex class="swatches">
+            <view class="swatch-pad"></view>
+            <view
+              wx:for="{{themes}}"
+              wx:key="id"
+              class="swatch-item"
+              data-id="{{item.id}}"
+              bindtap="onTapTheme"
+            >
+              <view
+                class="swatch {{item.id === mapColorId ? 'swatch-on' : ''}} {{item.id === 'custom' ? 'swatch-custom' : ''}}"
+                style="{{item.id === 'custom' ? '' : 'background:' + item.tint + ';'}}"
+              >
+                <view wx:if="{{item.id === 'custom'}}" class="swatch-core" style="background:{{item.tint}};"></view>
+              </view>
+              <text class="swatch-name {{item.id === mapColorId ? 'swatch-name-on' : ''}}">{{item.name}}</text>
+            </view>
+            <view class="swatch-pad"></view>
+          </scroll-view>
+          <view wx:if="{{mapColorId === 'custom'}}" class="color-picker cell-line">
+            <view id="colorPad" class="pad" style="background-color:{{hueColor}};" bindtouchstart="onPadStart" catchtouchmove="onPadMove">
+              <view class="pad-cursor" style="{{padCursor}}"></view>
+            </view>
+            <view id="hueBar" class="hue" bindtouchstart="onHueStart" catchtouchmove="onHueMove">
+              <view class="hue-cursor" style="{{hueCursor}}background:{{hueColor}};"></view>
+            </view>
+          </view>
+          <view wx:if="{{mapColorId === 'custom'}}" class="cell cell-line">
+            <text class="cell-label">色值</text>
+            <input
+              class="cell-input cell-input-hex"
+              value="{{customHexText}}"
+              maxlength="7"
+              placeholder="#E8DFD0"
+              placeholder-class="ph"
+              bindinput="onCustomHexInput"
+            />
+          </view>
+          <view class="cell cell-line">
+            <text class="cell-label cell-label-short">缩放</text>
+            <slider class="cell-slider" min="4" max="16" step="1" value="{{zoom}}" block-size="24" activeColor="#007AFF" backgroundColor="#E5E5EA" bindchanging="onZoomChanging" bindchange="onZoomChange" />
+            <text class="cell-num">{{zoom}}</text>
+          </view>
+        </view>
+        <text class="section-foot">缩放级别越大，地图越接近街道细节。</text>
+      </view>
+
+      <view wx:if="{{panel === 'opacity'}}" class="panel-page">
+        <view class="section-head panel-head">
+          <text class="section-title">不透明度</text>
+          <text class="section-action" bindtap="onResetOpacity">重置</text>
+        </view>
+        <view class="group">
+          <view class="cell">
+            <text class="cell-label cell-label-short">地图</text>
+            <slider class="cell-slider" min="0" max="100" step="1" value="{{mapOpacity}}" block-size="24" activeColor="#007AFF" backgroundColor="#E5E5EA" data-key="mapOpacity" bindchanging="onOpacityChanging" bindchange="onOpacityChange" />
+            <text class="cell-num">{{mapOpacity}}%</text>
+          </view>
+          <view class="cell cell-line">
+            <text class="cell-label cell-label-short">照片</text>
+            <slider class="cell-slider" min="0" max="100" step="1" value="{{photoOpacity}}" block-size="24" activeColor="#007AFF" backgroundColor="#E5E5EA" data-key="photoOpacity" bindchanging="onOpacityChanging" bindchange="onOpacityChange" />
+            <text class="cell-num">{{photoOpacity}}%</text>
+          </view>
+          <view class="cell cell-line">
+            <text class="cell-label cell-label-short">文字</text>
+            <slider class="cell-slider" min="0" max="100" step="1" value="{{textOpacity}}" block-size="24" activeColor="#007AFF" backgroundColor="#E5E5EA" data-key="textOpacity" bindchanging="onOpacityChanging" bindchange="onOpacityChange" />
+            <text class="cell-num">{{textOpacity}}%</text>
+          </view>
         </view>
       </view>
-    </view>
-  </block>
+
+      <view wx:if="{{panel === 'poster'}}" class="panel-page">
+        <view class="group">
+          <view class="cell">
+            <text class="cell-label">品牌底栏</text>
+            <switch class="cell-switch" checked="{{footerOn}}" color="#34C759" bindchange="onToggleFooter" />
+          </view>
+          <view class="cell cell-line">
+            <text class="cell-label">导出尺寸</text>
+            <text class="cell-value">{{exportSize}} px</text>
+          </view>
+        </view>
+      </view>
+    </scroll-view>
+  </view>
 
   <view wx:if="{{!singlePage}}" class="toolbar">
     <view wx:if="{{!hasPhoto}}" class="btn btn-primary {{busy ? 'btn-off' : ''}}" hover-class="tap-dim" bindtap="onChoosePhoto">从相册选择照片</view>
