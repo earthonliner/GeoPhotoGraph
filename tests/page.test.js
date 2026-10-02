@@ -834,9 +834,8 @@ test('导入与导出：显示逐张进度，批量导出期间保持屏幕常�
   assert.deepStrictEqual(texts, ['读取照片 1/3…', '读取照片 2/3…', '读取照片 3/3…', '获取地名…']);
   assert.deepStrictEqual(page.items.map((it) => it.place), ['ZERMATT', 'UNKNOWN', 'KYOTO']);
   assert.deepStrictEqual(wx.calls.modal, [], '没有定位不算错误，不弹窗');
-  assert.ok(page.data.placeVisible);
+  assert.ok(!page.data.placeVisible && page.data.panel === 'place', '不自动弹出面板，停在「地点」页');
   assert.strictEqual(page.poster.photoPath, 'b.jpg');
-  page.onPlaceClose();
 
   texts.length = 0;
   await page.onSaveAll();
@@ -1049,8 +1048,13 @@ test('没有定位的照片：导入后打开拍摄地点面板，选过的地�
   page.onLoad();
   await page.onChoosePhoto();
   assert.deepStrictEqual(wx.calls.modal, [], '不再弹出“未读取到位置”');
+  assert.ok(!page.data.placeVisible && !page.data.previewCovered, '先看到带照片的海报，不自动弹出面板');
+  assert.strictEqual(page.data.panel, 'place');
+  assert.ok(page.data.missingText.includes('拍摄地点') && !page.data.missingText.includes('日期'));
+  await page.onPickLocation();
   assert.ok(page.data.placeVisible && page.data.previewCovered);
   assert.strictEqual(page.data.placeTitle, '这张照片在哪里拍的？');
+  assert.strictEqual(page.data.sheetDate, false, '照片带了日期，面板里不出现日期');
   assert.deepStrictEqual(
     [page.data.fuzzyOn, page.data.canSearch, page.data.placeOthers, page.data.recentList],
     [false, false, 0, []]
@@ -1068,6 +1072,7 @@ test('没有定位的照片：导入后打开拍摄地点面板，选过的地�
   // 下一张照片：面板里列出最近使用的地点，一次点按即可
   wx.files = ['c.jpg'];
   await page.onChoosePhoto();
+  await page.onPickLocation();
   assert.deepStrictEqual(page.data.recentList, [{ name: '故宫博物院' }]);
   await page.onPlaceRecent(tap({ index: 0 }));
   assert.ok(!page.data.placeVisible);
@@ -1091,6 +1096,7 @@ test('没有定位的照片：导入后打开拍摄地点面板，选过的地�
   const searchPlaces = mapService.searchPlaces;
   mapService.searchPlaces = async () => [{ name: 'Zermatt', address: 'Valais, Switzerland', lat: 46.02, lon: 7.75 }];
   await again.onChoosePhoto();
+  await again.onPickLocation();
   assert.ok(again.data.placeVisible && again.data.canSearch);
   assert.strictEqual(again.data.recentList.length, 3);
   again.onSearchInput({ detail: { value: 'zer' } });
@@ -1117,6 +1123,7 @@ test('多张照片：选好的地点默认一起用于其余没有地点的照�
   page.onLoad();
   await page.onChoosePhoto();
   assert.strictEqual(page.poster.photoPath, 'b.jpg', '切到第一张没有地点的照片');
+  await page.onPickLocation();
   assert.deepStrictEqual([page.data.placeOthers, page.data.placeApplyAll], [1, true]);
   await page.onPlaceMap();
   assert.deepStrictEqual(page.items.map((it) => it.place), ['KYOTO', 'ZERMATT', 'ZERMATT']);
@@ -1127,6 +1134,7 @@ test('多张照片：选好的地点默认一起用于其余没有地点的照�
   wx.files = ['b.jpg', 'c.jpg', 'd.jpg'];
   await page.onChoosePhoto();
   assert.strictEqual(page.poster.photoPath, 'b.jpg');
+  await page.onPickLocation();
   assert.strictEqual(page.data.placeOthers, 2);
   await page.onPlaceRecent(tap({ index: 0 }));
   assert.ok(page.items.every((it) => it.place === 'ZERMATT'));
@@ -1174,6 +1182,72 @@ const fuzzy = (wx, result) => {
   };
 };
 
+EXIF['n.jpg'] = { hasGps: false, dateText: '', dateValue: '' };
+EXIF['g.jpg'] = { hasGps: true, latitude: 35.0116, longitude: 135.7681, dateText: '', dateValue: '' };
+
+test('没有日期的照片：海报暂用今天并在界面上说明，可在「地点」页、预览下方和地点面板里选日期', async () => {
+  const wx = createWx();
+  wx.files = ['n.jpg'];
+  const page = createPage(wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  const today = exifParser.formatDate(new Date());
+  assert.strictEqual(page.poster.dateText, today);
+  assert.deepStrictEqual([page.data.dateMissing, page.data.dateKnown], [true, false]);
+  assert.ok(page.data.missingText.includes('拍摄地点和日期'));
+  assert.ok(!page.data.placeVisible && page.data.panel === 'place');
+
+  await page.onPickLocation();
+  assert.strictEqual(page.data.placeTitle, '这张照片在哪里、哪天拍的？');
+  assert.strictEqual(page.data.sheetDate, true);
+  page.onDateChange({ detail: { value: '2023-09-21' } });
+  assert.strictEqual(page.poster.dateText, 'SEP 21, 2023');
+  assert.deepStrictEqual([page.data.dateMissing, page.data.sheetDate], [false, true], '选过后面板里的日期行保留');
+  assert.ok(page.data.placeVisible, '选日期不关闭面板');
+  page.onPlaceClose();
+  assert.ok(page.data.missingText.includes('拍摄地点') && !page.data.missingText.includes('日期'));
+  page.onDateReset();
+  assert.strictEqual(page.poster.dateText, 'SEP 21, 2023', '没有可恢复的拍摄日期');
+
+  // 有定位但没有日期：只缺日期，同样停在「地点」页
+  wx.files = ['g.jpg'];
+  await page.onChoosePhoto();
+  assert.strictEqual(page.poster.place, 'KYOTO');
+  assert.ok(page.data.dateMissing && page.data.panel === 'place');
+  assert.ok(page.data.missingText.includes('日期') && !page.data.missingText.includes('拍摄地点'));
+  page.onDateChange({ detail: { value: '2024-01-02' } });
+  assert.strictEqual(page.data.missingText, '');
+
+  // 带日期的照片不受影响，面板停在模板页
+  const other = createPage(createWx());
+  other.onLoad();
+  await other.onChoosePhoto();
+  assert.deepStrictEqual([other.data.dateMissing, other.data.missingText, other.data.panel], [false, '', 'template']);
+});
+
+test('弹层遮住预览前等当前一帧画完：背景里是带照片的海报，而不是空模板', async () => {
+  const wx = createWx();
+  wx.files = ['b.jpg'];
+  const page = createPage(wx);
+  page.onLoad();
+  const canvas = createCanvasNode();
+  page.preview = canvas;
+  await page.onChoosePhoto();
+  page.render = page.realRender;
+  page._imgCache = new Map();
+  canvas.ops.length = 0;
+  let drawnAtSnapshot = null;
+  const snap = wx.canvasToTempFilePath;
+  wx.canvasToTempFilePath = (o) => {
+    if (o.canvas === canvas) drawnAtSnapshot = canvas.ops.some((op) => op[0] === 'drawImage' && op[1] && op[1].url === 'b.jpg');
+    return snap(o);
+  };
+  page.render();
+  await page.onPickLocation();
+  assert.strictEqual(drawnAtSnapshot, true);
+  assert.ok(page.data.previewCovered && page.data.coverImage);
+});
+
 test('使用当前所在城市：点按时获取一次模糊位置，作为地点并记入「最近」', async () => {
   const wx = createWx();
   wx.files = ['b.jpg'];
@@ -1181,6 +1255,7 @@ test('使用当前所在城市：点按时获取一次模糊位置，作为地�
   const page = createPage(wx);
   page.onLoad();
   await page.onChoosePhoto();
+  await page.onPickLocation();
   assert.ok(page.data.placeVisible && page.data.fuzzyOn);
   assert.deepStrictEqual(wx.calls.fuzzy, [], '打开面板时不获取位置');
   await page.onPlaceCurrent();
@@ -1196,6 +1271,7 @@ test('使用当前所在城市：点按时获取一次模糊位置，作为地�
   const multi = createPage(wx);
   multi.onLoad();
   await multi.onChoosePhoto();
+  await multi.onPickLocation();
   await multi.onPlaceCurrent();
   assert.ok(multi.items.every((it) => it.place === 'KYOTO'));
 });
@@ -1434,8 +1510,7 @@ test('照片条：点没有地点的照片上的「选地点」，切到这张�
   page.onLoad();
   await page.onChoosePhoto();
   const [b, k] = page.items;
-  assert.ok(page.data.placeVisible, '导入后为没有定位的照片打开面板');
-  page.onPlaceClose();
+  assert.ok(!page.data.placeVisible, '导入后不自动弹出面板');
   assert.deepStrictEqual(page.data.list.map((x) => x.noLoc), [true, false]);
 
   // 当前就是这张：同样打开面板

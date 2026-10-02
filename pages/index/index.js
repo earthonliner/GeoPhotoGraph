@@ -140,6 +140,18 @@ function panelView(cropEnabled, current) {
   return { panels, panel: panels.some((x) => x.id === current) ? current : 'template' };
 }
 
+// 照片没带拍摄日期、用户也还没选过：海报上暂用今天
+function dateMissing(item) {
+  return !!item.photoPath && !item.dateManual && !(item.autoDate && item.autoDate.known);
+}
+
+// 「地点」页顶部的说明：这张照片缺了哪些信息
+function missingText(item) {
+  if (!item.photoPath) return '';
+  const what = [item.lat === null ? '拍摄地点' : '', dateMissing(item) ? '日期' : ''].filter(Boolean).join('和');
+  return what ? `照片里没有${what}信息，选好后海报会随之更新` : '';
+}
+
 // 随机模板：在当前分类内洗牌发牌，用完一轮再开始下一轮
 function pickRandomTemplates(count, categoryId) {
   return batchUtil.pickRandomTemplates(templatesOf(categoryId).map((t) => t.id), count);
@@ -213,6 +225,10 @@ Page({
     dateText: '',
     dateValue: '',
     dateManual: false,
+    dateKnown: false,
+    dateMissing: false,
+    missingText: '',
+    sheetDate: false,
     dateToday: exifParser.toDateValue(new Date()),
     place: '',
     placeLang: 'en',
@@ -579,6 +595,7 @@ Page({
     if (this.data.previewCovered) return;
     let coverImage = '';
     if (this.preview) {
+      await Promise.resolve(this._painting).catch(() => {});
       try {
         ({ tempFilePath: coverImage } = await wxp('canvasToTempFilePath', {
           canvas: this.preview,
@@ -722,6 +739,9 @@ Page({
           dateText: p.dateText,
           dateValue: p.dateValue,
           dateManual: p.dateManual,
+          dateKnown: !!(p.autoDate && p.autoDate.known),
+          dateMissing: dateMissing(p),
+          missingText: missingText(p),
           cropEnabled: !!CROP_REGIONS[p.templateId],
           cropZoom: Math.round(crop.zoom * 100),
           cropX: Math.round(crop.x * 100),
@@ -836,9 +856,11 @@ Page({
       if (i > 0) this.setData({ busyText: progress(i) });
       const item = this.createItem(filePath, baseTemplate);
       const exif = await exifParser.extractFromFile(filePath);
+      // 截图、编辑过或经聊天发送的照片常常没有 EXIF：暂用今天，并在界面上请用户确认
       item.autoDate = {
         text: exif.dateText || exifParser.formatDate(new Date()),
-        value: exif.dateValue || exifParser.toDateValue(new Date())
+        value: exif.dateValue || exifParser.toDateValue(new Date()),
+        known: !!exif.dateText
       };
       item.dateText = item.autoDate.text;
       item.dateValue = item.autoDate.value;
@@ -875,16 +897,12 @@ Page({
     );
     this.hideBusy();
 
-    // 选择拍摄地点是创作的下一步，而不是报错：照片没带定位时直接打开地点面板
-    const missing = created.filter((it) => this.items.includes(it) && it.lat === null);
+    // 照片没带拍摄地点或日期时，先让用户看到带照片的海报，编辑面板停在「地点」页，
+    // 页顶说明缺了什么，由用户点「选择」再打开地点面板，而不是一导入就弹出来
+    const missing = created.filter((it) => this.items.includes(it) && (it.lat === null || dateMissing(it)));
     if (!missing.length) return;
-    if (this.poster.lat !== null) {
-      this.poster = missing[0];
-      this.ensureCategory();
-      this.syncView();
-      this.render();
-    }
-    await this.openPlaceSheet();
+    if (!missing.includes(this.poster)) this.selectItem(missing[0]);
+    this.setData({ panel: 'place' });
   },
 
   /* ---------------------------- 内容安全 ---------------------------- */
@@ -1145,9 +1163,14 @@ Page({
     this._searchId += 1;
     clearTimeout(this._searchTimer);
     await this.coverPreview();
+    const noDate = dateMissing(this.poster);
+    let placeTitle = '更换拍摄地点';
+    if (this.poster.lat === null) placeTitle = noDate ? '这张照片在哪里、哪天拍的？' : '这张照片在哪里拍的？';
     this.setData({
       placeVisible: true,
-      placeTitle: this.poster.lat === null ? '这张照片在哪里拍的？' : '更换拍摄地点',
+      placeTitle,
+      // 照片没带日期时，在面板里一并选日期；选过后这一行保留到面板关闭
+      sheetDate: noDate,
       placeOthers: this.placeTargets(this.poster).length,
       placeApplyAll: true,
       recentList: this.recentPlaces.map((p) => ({ name: p.name })),
@@ -1659,7 +1682,7 @@ Page({
 
   onDateReset() {
     const auto = this.poster.autoDate;
-    if (!auto) return;
+    if (!auto || !auto.known) return;
     Object.assign(this.poster, { dateText: auto.text, dateValue: auto.value, dateManual: false });
     this.touch(this.poster, true);
   },
@@ -1821,7 +1844,13 @@ Page({
     };
   },
 
-  async render() {
+  // 记下最近一次绘制，弹层截图前等它画完，免得截到还没有照片的上一帧
+  render() {
+    this._painting = this.paint();
+    return this._painting;
+  },
+
+  async paint() {
     if (!this.preview) return;
     const renderId = ++this._renderId;
     const canvas = this.preview;

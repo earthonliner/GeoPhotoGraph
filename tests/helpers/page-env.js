@@ -170,6 +170,8 @@ function createPage(wx, name = 'index') {
   };
   if (name === 'index') {
     page.renders = 0;
+    // 需要真实绘制流程的测试可以换回 realRender
+    page.realRender = page.render;
     page.render = async function render() {
       this.renders += 1;
     };
