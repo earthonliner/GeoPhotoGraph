@@ -97,7 +97,9 @@
               <view wx:if="{{batchMode === 'random' && itemCount > 1}}" class="thumb-scrim">
                 <text class="thumb-tpl">{{item.tplName}}</text>
               </view>
-              <text wx:if="{{item.noLoc}}" class="thumb-badge thumb-badge-tint">选地点</text>
+              <view wx:if="{{item.noLoc}}" class="thumb-place" data-id="{{item.id}}" catchtap="onTapItemPlace">
+                <text class="thumb-badge thumb-badge-tint">选地点</text>
+              </view>
               <text wx:elif="{{item.locked && lockBadges}}" class="thumb-badge">水印</text>
               <view wx:if="{{itemCount > 1}}" class="thumb-hit thumb-hit-left" data-id="{{item.id}}" catchtap="onToggleSelect">
                 <view class="check {{item.selected ? 'check-on' : ''}}"></view>

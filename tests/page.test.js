@@ -1267,8 +1267,8 @@ test('app.json 声明了 getFuzzyLocation 及其用途说明', () => {
 // 云模式页面 + 内容安全：上传的副本进入 fake.files；wx.cloud.uploadFile 返回 seccheck/ 下的 fileID
 function securitySetup(extra) {
   config.security.pollMs = 0;
-  config.security.importWaitMs = 40;
   config.security.saveWaitMs = 40;
+  config.security.shareWaitMs = 40;
   config.security.watchMs = 5;
   config.security.watchRounds = 40;
   const env = cloudSetup();
@@ -1295,12 +1295,21 @@ function securitySetup(extra) {
   return Object.assign(env, extra);
 }
 
-test('内容安全：导入的照片通过检测后保留，云存储里的副本被删除', async () => {
+test('内容安全：导入不等检测结果、不显示检查提示；通过检测后保留，云存储里的副本被删除', async () => {
   const env = securitySetup();
   const page = createPage(env.wx);
   page.onLoad();
+  const texts = [];
+  const setData = page.setData.bind(page);
+  page.setData = (d, cb) => {
+    if (d.busyText) texts.push(d.busyText);
+    return setData(d, cb);
+  };
   await page.onChoosePhoto();
+  assert.ok(!texts.some((t) => t.includes('检查')), texts.join());
+  assert.strictEqual(page.data.busy, false);
   assert.strictEqual(page.data.itemCount, 1);
+  await sleep(60);
   assert.strictEqual(page.items[0].sec.status, 'pass');
   assert.strictEqual(env.fake.calls.mediaCheckAsync.length, 1);
   const call = env.fake.calls.mediaCheckAsync[0];
@@ -1318,7 +1327,8 @@ test('内容安全：违规照片被移除并提示，其余照片保留', async
   const page = createPage(env.wx);
   page.onLoad();
   await page.onChoosePhoto();
-  assert.strictEqual(page.data.itemCount, 2);
+  await sleep(60);
+  assert.strictEqual(page.data.itemCount, 2, '后台出结果后移除违规的照片');
   assert.deepStrictEqual(page.items.map((it) => it.photoPath), ['k.jpg', 'a.jpg']);
   const modal = env.wx.calls.modal.find((m) => m.title === '内容含违规信息');
   assert.strictEqual(modal.content, '这张照片含违规信息，已移除。');
@@ -1329,12 +1339,13 @@ test('内容安全：违规照片被移除并提示，其余照片保留', async
   const page2 = createPage(single.wx);
   page2.onLoad();
   await page2.onChoosePhoto();
+  await sleep(60);
   assert.strictEqual(page2.data.hasPhoto, false);
   assert.strictEqual(page2.data.itemCount, 0);
   assert.ok(single.wx.calls.modal.some((m) => m.title === '内容含违规信息'));
 });
 
-test('内容安全：导入时还没出结果的照片先保留，之后判为违规会被移除；保存前会再等一次', async () => {
+test('内容安全：还没出结果的照片先保留，之后判为违规会被移除；保存前会再等一次', async () => {
   const env = securitySetup();
   env.verdict = () => '';
   const page = createPage(env.wx);
@@ -1379,6 +1390,7 @@ test('内容安全：检测服务不可用时放行，不影响使用', async ()
   const page = createPage(env.wx);
   page.onLoad();
   await page.onChoosePhoto();
+  await sleep(20);
   assert.strictEqual(page.data.itemCount, 1);
   assert.strictEqual(page.items[0].sec.status, 'skipped');
 
@@ -1386,8 +1398,64 @@ test('内容安全：检测服务不可用时放行，不影响使用', async ()
     throw new Error('offline');
   };
   await page.onChoosePhoto();
+  await sleep(20);
   assert.strictEqual(page.data.itemCount, 1);
   assert.strictEqual(page.items[0].sec.status, 'skipped');
+});
+
+test('内容安全：照片检测通过前，转发卡片只用品牌图，不含照片；通过后用海报预览', async () => {
+  const env = securitySetup();
+  env.verdict = () => '';
+  const exportCanvas = createCanvasNode({ w: 256, h: 256 });
+  env.wx.nodes['#exportCanvas'] = exportCanvas;
+  const page = createPage(env.wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  page.preview = { width: 852, height: 1272 };
+
+  const pending = await page.onShareAppMessage().promise;
+  assert.ok(pending.imageUrl, '不能留空，否则微信会截取页面');
+  assert.ok(!env.wx.calls.snapshot.some((s) => s.canvas === page.preview), '没有截取含照片的预览');
+  assert.ok(exportCanvas.ops.some((op) => op[0] === 'fillText' && op[1] === 'GEOPICS'));
+
+  env.push('t1', 'pass');
+  await sleep(20);
+  const passed = await page.onShareAppMessage().promise;
+  assert.ok(passed.imageUrl);
+  assert.ok(env.wx.calls.snapshot.some((s) => s.canvas === page.preview), '通过后使用海报预览');
+});
+
+test('照片条：点没有地点的照片上的「选地点」，切到这张并打开拍摄地点面板', async () => {
+  const wx = createWx();
+  wx.store['geopics.membership'] = { invite: true };
+  wx.files = ['b.jpg', 'k.jpg'];
+  mockMapPick(wx, { latitude: 46.0207, longitude: 7.7491, name: 'Zermatt' });
+  const page = createPage(wx);
+  page.onLoad();
+  await page.onChoosePhoto();
+  const [b, k] = page.items;
+  assert.ok(page.data.placeVisible, '导入后为没有定位的照片打开面板');
+  page.onPlaceClose();
+  assert.deepStrictEqual(page.data.list.map((x) => x.noLoc), [true, false]);
+
+  // 当前就是这张：同样打开面板
+  assert.strictEqual(page.poster, b);
+  await page.onTapItemPlace(tap({ id: b.id }));
+  assert.ok(page.data.placeVisible);
+  assert.strictEqual(page.data.placeTitle, '这张照片在哪里拍的？');
+  page.onPlaceClose();
+
+  // 当前是另一张：先切换再打开
+  page.onTapItem(tap({ id: k.id }));
+  assert.strictEqual(page.poster, k);
+  await page.onTapItemPlace(tap({ id: b.id }));
+  assert.strictEqual(page.poster, b);
+  assert.strictEqual(page.data.currentId, b.id);
+  assert.ok(page.data.placeVisible);
+  await page.onPlaceMap();
+  assert.ok(!page.data.placeVisible);
+  assert.strictEqual(b.place, 'ZERMATT');
+  assert.deepStrictEqual(page.data.list.map((x) => x.noLoc), [false, false]);
 });
 
 test('内容安全：手动输入的违规地名被恢复，不会出现在海报标题和转发里；正常地名可用', async () => {

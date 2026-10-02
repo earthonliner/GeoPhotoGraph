@@ -543,6 +543,22 @@
   background: #007aff;
 }
 
+/* 「选地点」的点击热区比角标大一圈；与左上 / 右上的勾选、删除热区重叠时让给它们 */
+.thumb-place {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 1;
+  padding: 20rpx 12rpx;
+  transform: translate(-50%, -50%);
+}
+
+.thumb-place .thumb-badge {
+  position: static;
+  display: block;
+  transform: none;
+}
+
 /* 勾选 / 删除：可见图形小，点击热区放大 */
 .thumb-hit {
   position: absolute;

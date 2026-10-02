@@ -858,7 +858,9 @@ Page({
     this.ensureCategory();
     this.syncView();
     this.render();
+    // 内容检测在后台进行，不挡住编辑；保存、转发前会确认结果，判为违规时随时移除
     this.startImageChecks(created);
+    this.watchImages(created);
 
     if (mapService.hasToken() && created.some((it) => it.exif.hasGps)) this.setData({ busyText: '获取地名…' });
     await Promise.all(
@@ -871,11 +873,7 @@ Page({
         return null;
       })
     );
-    if (created.some((it) => it.sec && it.sec.status === 'pending')) this.setData({ busyText: '检查图片内容…' });
-    const risky = await this.settleImages(created, appConfig.security.importWaitMs);
     this.hideBusy();
-    if (risky.length) await this.dropRisky(risky);
-    this.watchImages(created);
 
     // 选择拍摄地点是创作的下一步，而不是报错：照片没带定位时直接打开地点面板
     const missing = created.filter((it) => this.items.includes(it) && it.lat === null);
@@ -925,7 +923,7 @@ Page({
     return items.filter((it) => it.sec && it.sec.status === 'risky');
   },
 
-  // 导入时没来得及出结果的照片，继续在后台等；之后判为违规就移除
+  // 导入后在后台等检测结果，判为违规就移除；超出轮数仍无结果的，保存前再等一次
   watchImages(items) {
     const pending = items.filter((it) => it.sec && it.sec.status === 'pending');
     if (!pending.length) return;
@@ -944,6 +942,8 @@ Page({
   async dropRisky(items) {
     const gone = items.filter((it) => this.items.includes(it));
     if (!gone.length) return;
+    // 正在为这张照片选地点时，面板随照片一起关掉
+    if (this.data.placeVisible && gone.includes(this.poster)) this.onPlaceClose();
     gone.forEach((it) => this.removeItem(it));
     await wxp('showModal', {
       title: '内容含违规信息',
@@ -1019,11 +1019,23 @@ Page({
 
   onTapItem(e) {
     const item = this.findItem(e.currentTarget.dataset.id);
-    if (!item || item === this.poster) return;
+    if (item) this.selectItem(item);
+  },
+
+  selectItem(item) {
+    if (item === this.poster) return;
     this.poster = item;
     this.ensureCategory();
     this.syncView();
     this.render();
+  },
+
+  // 缩略图上的「选地点」：切到这张照片并打开拍摄地点面板
+  onTapItemPlace(e) {
+    const item = this.findItem(e.currentTarget.dataset.id);
+    if (!item || this.data.busy) return null;
+    this.selectItem(item);
+    return this.openPlaceSheet();
   },
 
   onToggleSelect(e) {
@@ -1857,8 +1869,11 @@ Page({
   // 3 秒内没生成完时，微信使用不带 imageUrl 的默认内容
   onShareAppMessage() {
     const share = { title: this.shareTitle(), path: '/pages/index/index' };
-    const promise = this.checkPlaceText(this.poster)
-      .then((safe) => (safe ? this.composeShareImage() : ''))
+    const promise = Promise.all([this.checkPlaceText(this.poster), this.imageCleared(this.poster)])
+      .then(([safe, cleared]) => {
+        if (!cleared) return this.composeBrandCard();
+        return safe ? this.composeShareImage() : '';
+      })
       .catch((e) => {
         console.warn('compose share image failed', e);
         return '';
@@ -1873,6 +1888,51 @@ Page({
   // 朋友圈只能同步返回，使用默认的小程序图标
   onShareTimeline() {
     return { title: this.shareTitle() };
+  },
+
+  // 照片要检测通过（或检测服务不可用而放行）才能出现在转发卡片里；最多等 shareWaitMs，
+  // 微信只给 3 秒生成卡片
+  async imageCleared(item) {
+    if (!item.sec) return true;
+    await this.settleImages([item], appConfig.security.shareWaitMs);
+    return item.sec.status === 'pass' || item.sec.status === 'skipped';
+  },
+
+  // 照片还没检测完时的转发卡片：只有品牌标识，不含照片。不能留空，否则微信会截取页面（含照片）
+  async composeBrandCard() {
+    const fallback = '/assets/logo.png';
+    if (this.data.busy) return fallback;
+    try {
+      const canvas = await this.queryCanvas('#exportCanvas');
+      canvas.width = SHARE_W;
+      canvas.height = SHARE_H;
+      const ctx = canvas.getContext('2d');
+      const logo = await loadImage(canvas, fallback);
+      ctx.fillStyle = '#F2F2F7';
+      ctx.fillRect(0, 0, SHARE_W, SHARE_H);
+      const side = 200;
+      ctx.drawImage(logo, (SHARE_W - side) / 2, 150, side, side);
+      ctx.fillStyle = '#1C1C1E';
+      ctx.font = '700 56px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText('GEOPICS', SHARE_W / 2, 450);
+      const { tempFilePath } = await wxp('canvasToTempFilePath', {
+        canvas,
+        x: 0,
+        y: 0,
+        width: SHARE_W,
+        height: SHARE_H,
+        destWidth: SHARE_W,
+        destHeight: SHARE_H,
+        fileType: 'jpg',
+        quality: 0.9
+      });
+      return tempFilePath || fallback;
+    } catch (e) {
+      console.warn('compose brand card failed', e);
+      return fallback;
+    }
   },
 
   async composeShareImage() {
